@@ -1,0 +1,3 @@
+{
+  "extends": "./AI-Agent/tsconfig.json"
+}
