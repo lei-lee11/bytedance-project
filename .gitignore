@@ -1,3 +1,4 @@
-
-# LangGraph API
-.langgraph_api
+# .gitignore
+.env
+dist/
+node_modules/

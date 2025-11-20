@@ -1,0 +1,24 @@
+{
+  "name": "project",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "convo": "node dist/cli/commands.js",
+    "convo:repl": "node dist/cli/commands.js --repl",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@types/dotenv": "^6.1.1",
+    "@types/node": "^24.10.1",
+    "dotenv": "^17.2.3",
+    "langchain": "^1.0.6",
+    "typescript": "^5.9.3",
+    "yargs": "^18.0.0"
+  }
+}
