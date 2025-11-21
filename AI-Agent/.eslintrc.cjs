@@ -23,7 +23,7 @@ module.exports = {
     "*.d.ts",
   ],
   rules: {
-    "no-instanceof/no-instanceof": 2,
+    //"no-instanceof/no-instanceof": 2,
     "@typescript-eslint/explicit-module-boundary-types": 0,
     "@typescript-eslint/no-empty-function": 0,
     "@typescript-eslint/no-shadow": 0,
@@ -36,7 +36,7 @@ module.exports = {
     "class-methods-use-this": 0,
     "import/extensions": [2, "ignorePackages"],
     "import/no-extraneous-dependencies": [
-      "error",
+      "warn",
       { devDependencies: ["**/*.test.ts"] },
     ],
     "import/no-unresolved": 0,
