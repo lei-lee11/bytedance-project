@@ -7,6 +7,7 @@ export const StateAnnotation = Annotation.Root({
     reducer: messagesStateReducer,
     default: () => [],
   }),
+  summary: Annotation<string>(),
   currentTask: Annotation<string>,//当前要执行的任务
   codeContext: Annotation<string>, //相关代码上下文
   programmingLanguage: Annotation<string>, // 编程语言

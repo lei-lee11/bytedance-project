@@ -23,6 +23,7 @@
   "dependencies": {
     "@langchain/core": "^1.0.6",
     "@langchain/langgraph": "^1.0.2",
+    "@langchain/langgraph-checkpoint-mongodb": "^1.0.0",
     "@langchain/langgraph-sdk": "^1.0.0",
     "@langchain/openai": "^1.1.2",
     "dotenv": "^17.2.3",
