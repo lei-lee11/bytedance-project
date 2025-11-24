@@ -1,5 +1,4 @@
 const { Client } = await import("@langchain/langgraph-sdk");
-import { graph } from "../../agent/graph.ts";
 import { closeConnection } from "../../config/checkpointer.ts";
 
 // only set the apiUrl if you changed the default port when calling langgraph dev

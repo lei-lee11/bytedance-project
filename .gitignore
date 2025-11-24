@@ -21,3 +21,9 @@ dist
 
 # LangGraph API
 .langgraph_api
+
+.idea/
+
+file_operation.test.ts
+
+CLAUDE.md
