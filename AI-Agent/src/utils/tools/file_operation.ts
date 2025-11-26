@@ -9,7 +9,7 @@ interface FileReadResult {
     error?: string;
     filePath: string;
 }
-
+//读取多个文件内容，支持路径验证、错误处理和内容格式化
  const read_files = tool(
     async ({ file_paths }: { file_paths: string[] }) => {
         const results: FileReadResult[] = [];
@@ -113,7 +113,7 @@ interface FileReadResult {
     }
 );
 
-// 额外的文件操作工具
+//检查文件或目录是否存在，并返回基本信息（类型、大小、修改时间等）
  const file_exists = tool(
     async ({ file_path }: { file_path: string }) => {
         try {
@@ -144,7 +144,7 @@ interface FileReadResult {
         })
     }
 );
-
+//列出目录内容，显示文件和子目录，支持隐藏文件过滤
  const list_directory = tool(
     async ({ directory_path, include_hidden = false }: { directory_path: string; include_hidden?: boolean }) => {
         try {
@@ -230,7 +230,7 @@ interface FileReadResult {
         })
     }
 );
-
+//write_file : 写入文件内容，支持自动创建目录、备份现有文件和内容验证
  const write_file = tool(
     async ({ file_path, content, create_directories = true }: { file_path: string; content: string; create_directories?: boolean }) => {
         try {
@@ -370,7 +370,7 @@ interface FileReadResult {
         }),
     }
 );
-
+//向文件追加内容，提供与write_file类似的安全检查
  const append_to_file = tool(
     async ({ file_path, content, create_directories = true }: { file_path: string; content: string; create_directories?: boolean }) => {
         try {

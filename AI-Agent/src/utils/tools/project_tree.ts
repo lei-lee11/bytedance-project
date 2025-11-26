@@ -6,6 +6,7 @@ import { tool } from "@langchain/core/tools";
 import fs from "fs/promises";
 import path from "path";
 
+// 项目目录树工具：返回格式化的项目目录结构（可配置深度与过滤）
  const project_tree = tool(
   async ({
     // 根目录（相对或绝对路径），默认当前工作目录 '.'

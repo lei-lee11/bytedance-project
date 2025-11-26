@@ -7,4 +7,10 @@ const tools =[
     ...project_tree_tool,
     ...testTools
 ]
-export {tools}
+export const SENSITIVE_TOOLS = [
+  "manualTestRunnerTool",
+  "autoTestRunnerTool",
+  "append_to_file",
+  "write_file",
+];
+export { tools }
