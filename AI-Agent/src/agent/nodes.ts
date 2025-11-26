@@ -4,9 +4,10 @@ import {
   HumanMessage,
 } from "@langchain/core/messages";
 import { AgentState } from "./state.js";
-import { model } from "../config/model.js";
+import { baseModel ,modelWithTools} from "../config/model.js";
+import { ToolNode } from "@langchain/langgraph/prebuilt";
 import { z } from "zod";
-
+import { tools } from "../utils/tools/index.ts";
 const MAX_RETRIES = 5;
 
 //解析用户输入，提取用户意图
@@ -29,7 +30,7 @@ ${state.messages
     }),
     // 注意：不再单独加 HumanMessage，因为历史已包含
   ];
-  const response = await model.invoke(parsePrompt);
+  const response = await baseModel.invoke(parsePrompt);
   const parsed = JSON.parse(response.content as string);
   return {
     currentTask: parsed.currentTask?.trim() || "",
@@ -64,7 +65,7 @@ export const summarizeConversation = async (state: AgentState) => {
     ...state.messages,
     new HumanMessage({ content: summaryMessage }),
   ];
-  const response = await model.invoke(messages);
+  const response = await baseModel.invoke(messages);
 
   // 删除除最后2条外的所有消息
   const deleteMessages = state.messages
@@ -93,7 +94,7 @@ export const generateCode = async (state: AgentState) => {
     ...messages,
   ];
 
-  const response = await model.invoke(codePrompt);
+  const response = await baseModel.invoke(codePrompt);
   return { messages: [...messages, response] }; //reduce的原理
 };
 export const CodeReviewSchema = z.object({
@@ -119,7 +120,7 @@ export const reviewCode = async (state: AgentState) => {
     throw new Error("No AI-generated code found for review");
   }
   const generatedCode = lastAIMessage.content as string;
-  const structuredModel = model.withStructuredOutput(CodeReviewSchema);
+  const structuredModel = baseModel.withStructuredOutput(CodeReviewSchema);
   const reviewPrompt = [
     new SystemMessage({
       content: `你是一个严格的代码审查专家。
@@ -160,3 +161,10 @@ export const reviewCode = async (state: AgentState) => {
     };
   }
 };
+
+export const toolNode = new ToolNode(tools);
+export const agent = async (state: AgentState) => {
+  const {messages} = state;
+  const response = await modelWithTools.invoke(messages);
+  return { messages: [...messages, response] };
+}

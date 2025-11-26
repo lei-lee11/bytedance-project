@@ -6,7 +6,7 @@ import { tool } from "@langchain/core/tools";
 import fs from "fs/promises";
 import path from "path";
 
-export const project_tree = tool(
+ const project_tree = tool(
   async ({
     // 根目录（相对或绝对路径），默认当前工作目录 '.'
     root_path = ".",
@@ -125,4 +125,4 @@ export const project_tree = tool(
   }
 );
 
-export default project_tree;
+export const project_tree_tool = [project_tree];

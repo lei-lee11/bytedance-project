@@ -96,7 +96,7 @@ async function findAvailableTestCommand(
 }
 
 // 工具1：自动检测语言并运行测试
-export const autoTestRunnerTool = new DynamicStructuredTool({
+ const autoTestRunnerTool = new DynamicStructuredTool({
   name: "auto_run_test",
   description: `自动检测项目语言并运行相应的单元测试。支持的语言包括：${Object.keys(LANGUAGE_CONFIGS).join(', ')}。会自动选择合适的测试命令。`,
   schema: z.object({
@@ -158,7 +158,7 @@ export const autoTestRunnerTool = new DynamicStructuredTool({
 });
 
 // 工具2：手动指定命令运行测试
-export const manualTestRunnerTool = new DynamicStructuredTool({
+ const manualTestRunnerTool = new DynamicStructuredTool({
   name: "run_test_command",
   description: "手动指定测试命令来运行单元测试。适用于自定义测试命令或自动检测失败的情况。",
   schema: z.object({
@@ -215,7 +215,7 @@ export const manualTestRunnerTool = new DynamicStructuredTool({
 });
 
 // 工具3：列出支持的语言和命令
-export const listLanguagesTool = new DynamicStructuredTool({
+ const listLanguagesTool = new DynamicStructuredTool({
   name: "list_supported_test_languages",
   description: "列出所有支持的编程语言及其测试命令。",
   schema: z.object({}),
@@ -234,9 +234,11 @@ export const listLanguagesTool = new DynamicStructuredTool({
 });
 
 // 导出所有测试工具
-export const testTools = [
+
+ export const testTools = [
   autoTestRunnerTool,
   manualTestRunnerTool,
   listLanguagesTool
 ];
+
 

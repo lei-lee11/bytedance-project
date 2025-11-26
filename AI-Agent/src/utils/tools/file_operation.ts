@@ -10,7 +10,7 @@ interface FileReadResult {
     filePath: string;
 }
 
-export const read_files = tool(
+ const read_files = tool(
     async ({ file_paths }: { file_paths: string[] }) => {
         const results: FileReadResult[] = [];
 
@@ -114,7 +114,7 @@ export const read_files = tool(
 );
 
 // 额外的文件操作工具
-export const file_exists = tool(
+ const file_exists = tool(
     async ({ file_path }: { file_path: string }) => {
         try {
             const resolvedPath = path.resolve(file_path);
@@ -145,7 +145,7 @@ export const file_exists = tool(
     }
 );
 
-export const list_directory = tool(
+ const list_directory = tool(
     async ({ directory_path, include_hidden = false }: { directory_path: string; include_hidden?: boolean }) => {
         try {
             const resolvedPath = path.resolve(directory_path);
@@ -231,7 +231,7 @@ export const list_directory = tool(
     }
 );
 
-export const write_file = tool(
+ const write_file = tool(
     async ({ file_path, content, create_directories = true }: { file_path: string; content: string; create_directories?: boolean }) => {
         try {
             // 解析文件路径
@@ -371,7 +371,7 @@ export const write_file = tool(
     }
 );
 
-export const append_to_file = tool(
+ const append_to_file = tool(
     async ({ file_path, content, create_directories = true }: { file_path: string; content: string; create_directories?: boolean }) => {
         try {
             // 解析文件路径
@@ -487,3 +487,10 @@ export const append_to_file = tool(
     }
 );
 
+export const file_operations = [
+    read_files,
+    file_exists,
+    list_directory,
+    append_to_file,
+    write_file
+];
