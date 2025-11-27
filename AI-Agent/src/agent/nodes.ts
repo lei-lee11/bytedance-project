@@ -10,6 +10,7 @@ import { ToolNode } from "@langchain/langgraph/prebuilt";
 import { z } from "zod";
 import { tools } from "../utils/tools/index.ts";
 const MAX_RETRIES = 5;
+import { project_tree } from "../utils/tools/project_tree.ts";
 
 //解析用户输入，提取用户意图
 export const parseUserInput = async (state: AgentState) => {
@@ -79,6 +80,50 @@ export const summarizeConversation = async (state: AgentState) => {
     messages: deleteMessages,
   };
 };
+
+
+//扫描项目结构
+export const injectProjectTreeNode = async (state: AgentState) => {
+  // 如果不需要更新就直接返回（看你的策略）
+  if (state.projectTreeInjected) {
+    return {};
+  }
+
+  const root = state.projectRoot || ".";
+  const treeText = await project_tree.invoke({
+    root_path: root,
+    max_depth: 2,
+    include_hidden: false,
+    include_files: true,
+    max_entries: 3000,
+  });
+
+  const systemMsg = new SystemMessage({
+    content: `下面是当前项目的目录结构（已做截断，请在写代码时遵循该结构）：
+
+${treeText}`,
+  });
+
+  // 如果之前已经有一条项目结构消息，先给它发个删除指令
+  const deletes =
+    state.projectTreeMessageId
+      ? [new RemoveMessage({ id: state.projectTreeMessageId })]
+      : [];
+
+  return {
+    messages: [
+      ...deletes,            // 先删旧的
+      systemMsg,             // 再插新的
+      ...state.messages,     // 然后是原来的内容
+    ],
+    projectTreeText: treeText,
+    projectTreeMessageId: systemMsg.id,
+    projectTreeInjected: true,
+  };
+};
+
+
+
 
 // 生成代码，根据用户意图和上下文
 export const generateCode = async (state: AgentState) => {
@@ -183,3 +228,4 @@ export const humanReviewNode = async (_state: AgentState) => {
   console.log("--- 人工已审批，继续执行 ---");
   return {};
 };
+
