@@ -2,6 +2,7 @@
   "extends": "@tsconfig/recommended/tsconfig.json",
   "compilerOptions": {
     "allowImportingTsExtensions": true,
+    "allowSyntheticDefaultImports": true,
     "noEmit": true,
     "target": "ES2021",
     "lib": ["ES2021", "ES2022.Object", "DOM"],
@@ -20,8 +21,11 @@
     "strictFunctionTypes": false,
     "outDir": "dist",
     "types": ["jest", "node"],
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "allowArbitraryExtensions": true
   },
-  "include": ["**/*.ts", "**/*.js"],
+  "include": ["**/*.ts", "**/*.tsx", "**/*.js"],
   "exclude": ["node_modules", "dist"]
 }

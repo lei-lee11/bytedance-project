@@ -1,36 +1,64 @@
 import { StateGraph, START, END } from "@langchain/langgraph";
+import { AIMessage } from "@langchain/core/messages";
 import { StateAnnotation, AgentState } from "./state.js";
-import { checkpointer } from "../config/checkpointer.js";
-import { parseUserInput, generateCode, summarizeConversation, reviewCode } from "./nodes.js";
+import { MemorySaver } from "@langchain/langgraph";
+//import { checkpointer } from "../config/checkpointer.js";
+import { SENSITIVE_TOOLS } from "../utils/tools/index.ts";
+import {
+  summarizeConversation,
+  toolNode,
+  agent,
+  humanReviewNode,
+} from "./nodes.ts";
 
-const routingFunction = (state: AgentState) => {
-  return state.reviewResult === "pass" ? "end" : "regenerate";
-};
- const shouldContinue = (state: AgentState) => {
-  const messages = state.messages;
-  // If there are more than six messages, then we summarize the conversation
-  if (messages.length > 6) {
-    return "summarize_conversation";
-  }
-  // Otherwise we can just end
-  return "no_summarize";
-};
+const checkpointer = new MemorySaver();
 // 创建图实例
+async function routeAgentOutput(state: AgentState) {
+  const messages = state.messages;
+  const lastMessage = messages[messages.length - 1];
+
+  // 1. 检查是否有工具调用
+  if (
+    lastMessage &&
+    AIMessage.isInstance(lastMessage) &&
+    lastMessage.tool_calls?.length
+  ) {
+    // 检查敏感性
+    const hasSensitiveTool = lastMessage.tool_calls.some((tool) =>
+      SENSITIVE_TOOLS.includes(tool.name),
+    );
+
+    if (hasSensitiveTool) {
+      return "human_review"; // 路由到审批节点
+    }
+
+    return "toolNode"; // 安全工具，直接执行
+  }
+
+  // 2. 检查是否需要总结 (保留你之前的逻辑)
+  if (messages.length > 6) {
+    return "summarize";
+  }
+
+  // 3. 结束
+  return END;
+}
 const workflow = new StateGraph(StateAnnotation)
   .addNode("summarize", summarizeConversation)
-  .addNode("parse", parseUserInput)
-  .addNode("generate", generateCode)
-  .addNode("review", reviewCode)
-  .addEdge(START, "parse")
-  .addConditionalEdges("parse", shouldContinue, {
-    summarize_conversation: "summarize",
-    no_summarize: "generate",
+  .addNode("agent", agent)
+  .addNode("tool", toolNode)
+  .addNode("human_review", humanReviewNode)
+  .addEdge(START, "agent")
+  .addConditionalEdges("agent", routeAgentOutput, {
+    toolNode: "tool", // 安全工具 -> 直接执行
+    human_review: "human_review", // 敏感工具 -> 去审批
+    summarize: "summarize",
+    [END]: END,
   })
-  .addEdge("summarize", "generate")
-  .addEdge("generate", "review")
-  .addConditionalEdges("review", routingFunction, {
-    regenerate: "generate",
-    end: END,
-  });
-
-export const graph = workflow.compile({ checkpointer });
+  .addEdge("human_review", "tool")
+  .addEdge("tool", "agent")
+  .addEdge("summarize", END);
+export const graph = workflow.compile({
+  checkpointer: checkpointer,
+  interruptBefore: ["human_review"],
+});
