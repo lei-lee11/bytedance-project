@@ -102,7 +102,7 @@ export const App = ({ initialMessage }: { initialMessage?: string }) => {
 
   return (
     <Box flexDirection="column" padding={1}>
-      /* 历史消息 (静态，不可变) */
+      {/* 历史消息 (静态，不可变) */}
       <Static items={history}>
         {(item) => (
           <Box key={item.id} flexDirection="column" marginBottom={1}>
@@ -133,7 +133,7 @@ export const App = ({ initialMessage }: { initialMessage?: string }) => {
         </Box>
       )}
 
-      /* 3. 底部输入框 */
+      {/* 3. 底部输入框 */}
       <Box borderStyle="round" borderColor={isThinking ? "yellow" : "gray"} flexDirection="column">
         {isThinking ? (
           <Box>
