@@ -94,7 +94,7 @@ async function findAvailableTestCommand(
   
   return null;
 }
-
+  
 // 工具1：自动检测语言并运行测试
  const autoTestRunnerTool = new DynamicStructuredTool({
   name: "auto_run_test",

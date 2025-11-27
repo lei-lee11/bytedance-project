@@ -1,7 +1,8 @@
 import { StateGraph, START, END } from "@langchain/langgraph";
 import { AIMessage } from "@langchain/core/messages";
 import { StateAnnotation, AgentState } from "./state.js";
-import { checkpointer } from "../config/checkpointer.js";
+import { MemorySaver } from "@langchain/langgraph";
+//import { checkpointer } from "../config/checkpointer.js";
 import { SENSITIVE_TOOLS } from "../utils/tools/index.ts";
 import {
   summarizeConversation,
@@ -10,6 +11,7 @@ import {
   humanReviewNode,
 } from "./nodes.ts";
 
+const checkpointer = new MemorySaver();
 // 创建图实例
 async function routeAgentOutput(state: AgentState) {
   const messages = state.messages;
