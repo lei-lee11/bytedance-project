@@ -9,6 +9,7 @@ import { ToolNode } from "@langchain/langgraph/prebuilt";
 // import { Command } from "@langchain/langgraph";
 import { z } from "zod";
 import { tools } from "../utils/tools/index.ts";
+import { randomUUID } from "crypto";
 const MAX_RETRIES = 5;
 import { project_tree } from "../utils/tools/project_tree.ts";
 
@@ -84,7 +85,7 @@ export const summarizeConversation = async (state: AgentState) => {
 
 //扫描项目结构
 export const injectProjectTreeNode = async (state: AgentState) => {
-  // 如果不需要更新就直接返回（看你的策略）
+  // 如果不需要更新就直接返回
   if (state.projectTreeInjected) {
     return {};
   }
@@ -92,7 +93,7 @@ export const injectProjectTreeNode = async (state: AgentState) => {
   const root = state.projectRoot || ".";
   const treeText = await project_tree.invoke({
     root_path: root,
-    max_depth: 2,
+    max_depth: -1,
     include_hidden: false,
     include_files: true,
     max_entries: 3000,
@@ -103,6 +104,15 @@ export const injectProjectTreeNode = async (state: AgentState) => {
 
 ${treeText}`,
   });
+
+  // 确保 systemMsg 有一个可用于后续删除的唯一 id
+  const generatedId = typeof randomUUID === "function" ? randomUUID() : `project-tree-${Date.now()}`;
+  try {
+    // 某些 Message 实例可能是只读类型，这里通过 unknown -> 指定类型 赋值 id
+    (systemMsg as unknown as { id?: string }).id = generatedId;
+  } catch {
+    // 忽略赋值错误，仍然将 id 返回给 state
+  }
 
   // 如果之前已经有一条项目结构消息，先给它发个删除指令
   const deletes =
@@ -117,7 +127,7 @@ ${treeText}`,
       ...state.messages,     // 然后是原来的内容
     ],
     projectTreeText: treeText,
-    projectTreeMessageId: systemMsg.id,
+    projectTreeMessageId: generatedId,
     projectTreeInjected: true,
   };
 };
