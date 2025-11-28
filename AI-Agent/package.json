@@ -28,6 +28,7 @@
     "@langchain/langgraph-sdk": "^1.0.0",
     "@langchain/openai": "^1.1.2",
     "ahooks": "^3.9.6",
+    "diff": "^8.0.2",
     "dotenv": "^17.2.3",
     "ink": "^6.5.1",
     "ink-big-text": "^2.0.0",

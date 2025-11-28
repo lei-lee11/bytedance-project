@@ -2,12 +2,14 @@ import { file_operations } from './file_operation.ts'
 import { project_tree_tool } from './project_tree.ts'
 import { testTools } from './testRunner.ts'
 import { backgroundProcessTools } from './backgroundProcess.ts'
+import { codeEditTools } from './code_edit.ts'
 
 const tools =[
     ...file_operations,
     ...project_tree_tool,
     ...testTools,
-    ...backgroundProcessTools
+    ...backgroundProcessTools,
+    ...codeEditTools
 ]
 export const SENSITIVE_TOOLS = [
   "manualTestRunnerTool",
@@ -16,5 +18,7 @@ export const SENSITIVE_TOOLS = [
   "write_file",
   "start_background_process",
   "stop_background_process",
+  "edit_code_snippet",
+  "restore_from_backup",
 ];
 export { tools }
