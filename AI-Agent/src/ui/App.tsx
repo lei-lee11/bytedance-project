@@ -1,23 +1,23 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Box, Text, Static,useInput } from "ink";
+import { Box, Text, Static, useInput, Newline } from "ink";
 import TextInput from "ink-text-input";
+import SelectInput from "ink-select-input"; // ✨ 新增：用于选择菜单
 import Spinner from "ink-spinner";
 import { useRequest } from "ahooks";
 import { marked } from "marked";
 import TerminalRenderer from "marked-terminal";
 import { HumanMessage, ToolMessage } from "@langchain/core/messages";
-import { graph } from "../agent/graph.js";
+import { graph } from "../agent/graph.js"; 
 
+// --- 配置 Markdown ---
 marked.setOptions({
   renderer: new TerminalRenderer({
     code: (code: any) => code,
-    // 让引用块稍微明显一点，模拟思考块
-    blockquote: (quote: string) => `
-  │ ${quote}
-`,
+    blockquote: (quote: string) => `│ ${quote}`,
   }) as any,
 });
 
+// --- 类型定义 ---
 type UIMessage = {
   id: string;
   role: "user" | "ai" | "system";
@@ -25,96 +25,146 @@ type UIMessage = {
   reasoning?: string;
 };
 
-const THREAD_ID = "cli-session-1";
+type ToolState = { name: string; input: string; };
+type PendingToolState = { name: string; args: any; };
 
-const generateId = () =>
-  `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+const THREAD_ID = "cli-session-v1";
+const generateId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+
+// 组件 1: 顶部标题栏 
+
+const Header = () => (
+  <Box borderStyle="classic" borderColor="blue" paddingX={1} marginBottom={1}>
+    <Text bold color="blue">🤖 AI Agent CLI </Text>
+    <Text color="gray"> | Powered by LangGraph & Ink</Text>
+  </Box>
+);
+
+
+//  组件 2: 思考折叠面板 
+
 const ThinkingPanel = ({ content, isFinished = false }: { content: string, isFinished?: boolean }) => {
-  // 默认是否折叠：如果内容超过 150 字符，且不在 finished 状态，默认折叠
-  const [isExpanded, setIsExpanded] = useState(true);
-  const shouldCollapse = content.length > 150;
-
-  // 监听键盘事件 (仅在组件挂载且未结束时有效)
-  useInput((input, key) => {
-    if (!isFinished && key.tab) {
-      setIsExpanded((prev) => !prev);
-    }
-  }, { isActive: !isFinished }); // 只有在思考时才激活监听
-
-  // 渲染逻辑
   if (!content) return null;
 
-  // 历史记录(Finished)状态：用灰色引用块显示，不需要交互
+  // 1. 如果思考已结束，显示一行摘要
   if (isFinished) {
     return (
-      <Box flexDirection="column" borderStyle="single" borderColor="gray" paddingX={1} marginBottom={1}>
-        <Text color="gray" dimColor>🤔 Thought Process:</Text>
-        <Box marginLeft={0}>
-          <Text color="gray" dimColor>{content}</Text>
-        </Box>
+      <Box flexDirection="column" marginLeft={2} marginBottom={1}>
+         <Text color="gray" dimColor>↳ 💡 思考过程已隐藏 (由 {content.length} 字符组成)</Text>
       </Box>
     );
   }
 
-  // 实时(Running)状态：支持交互
+  // 2. 如果正在思考，截取最后几行 (类似 tail -f 效果)
+  // split('\n') 可能会导致性能问题如果文本极大，但在流式输出中通常没事
+  const lines = content.split('\n');
+  const maxLines = 5; // 只显示最后 5 行
+  
+  const displayLines = lines.length > maxLines 
+    ? lines.slice(-maxLines) 
+    : lines;
+  
+  const isTruncated = lines.length > maxLines;
+
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} marginBottom={1}>
-      <Box justifyContent="space-between">
-        <Text color="yellow" bold>
-           <Spinner type="dots" /> 🤔 Thinking... 
-        </Text>
-        {shouldCollapse && (
-          <Text color="gray" dimColor>
-             [{isExpanded ? "TAB to Collapse" : "TAB to Expand"}]
-          </Text>
-        )}
+      <Box marginBottom={0}>
+        <Text color="yellow" bold><Spinner type="dots" /> AI 正在思考...</Text>
       </Box>
-
-      {/* 根据折叠状态显示内容 */}
-      {(isExpanded || !shouldCollapse) ? (
-        <Box marginTop={1}>
-          <Text color="yellow">{content}</Text>
-        </Box>
-      ) : (
-        <Box marginTop={0}>
-          <Text color="yellow" dimColor>
-             ... {content.slice(-80).replace(/n/g, ' ')} (Click TAB to view full)
-          </Text>
-        </Box>
-      )}
+      
+      <Box marginTop={0} flexDirection="column">
+        {/* 如果被截断，显示省略号提示 */}
+        {isTruncated && (
+          <Text color="yellow" dimColor>... (上文省略)</Text>
+        )}
+        
+        {/* 显示最后几行内容 */}
+        {displayLines.map((line, i) => (
+           <Text key={i} color="yellow">{line || " "}</Text>
+        ))}
+      </Box>
     </Box>
   );
 };
+
+
+//  组件 3: 工具审批卡片 (核心交互)
+
+const ApprovalCard = ({ 
+  tool, 
+  onSelect 
+}: { 
+  tool: PendingToolState, 
+  onSelect: (choice: 'approve' | 'reject') => void 
+}) => {
+  
+  const items = [
+    { label: "✅ 批准执行 (Approve)", value: "approve" },
+    { label: "🚫 拒绝操作 (Reject)", value: "reject" },
+  ];
+
+  return (
+    <Box flexDirection="column" borderStyle="double" borderColor="red" padding={1} marginY={1}>
+      <Box flexDirection="column" marginBottom={1}>
+        <Text color="red" bold>🛑 安全拦截 (Approval Required)</Text>
+        <Text>AI 请求执行外部操作，请审核：</Text>
+      </Box>
+
+      {/* 工具详情框 */}
+      <Box flexDirection="column" borderStyle="single" borderColor="gray" paddingX={1} marginBottom={1}>
+        <Text>🛠️ 工具名称: <Text bold color="magenta">{tool.name}</Text></Text>
+        <Box marginTop={1} flexDirection="column">
+          <Text color="gray">参数 Payload:</Text>
+          <Text color="yellow">{JSON.stringify(tool.args, null, 2)}</Text>
+        </Box>
+      </Box>
+
+      {/* 选择菜单 */}
+      <Text bold>请选择操作:</Text>
+      <SelectInput 
+        items={items} 
+        onSelect={(item) => onSelect(item.value as 'approve' | 'reject')}
+      />
+    </Box>
+  );
+};
+
+
+// 主程序 App
 export const App = ({ initialMessage }: { initialMessage?: string }) => {
   const [input, setInput] = useState("");
   const [history, setHistory] = useState<UIMessage[]>([]);
   const [statusText, setStatusText] = useState("");
+  
+  // 状态管理
   const [currentAIContent, setCurrentAIContent] = useState("");
   const [currentReasoning, setCurrentReasoning] = useState("");
+  const [currentTool, setCurrentTool] = useState<ToolState | null>(null);
+  const [pendingTool, setPendingTool] = useState<PendingToolState | null>(null); // 待审批工具
+  
   const [awaitingApproval, setAwaitingApproval] = useState(false);
 
-
-  // 1. 纯粹的发送逻辑 (不处理 User History)
+  // --- 发送消息逻辑 ---
   const { run: sendMessage, loading: isThinking } = useRequest(
     async (text: string | null, isResume = false) => {
       setInput("");
       setCurrentAIContent("");
-      setCurrentReasoning(""); // 重置思考
+      setCurrentReasoning("");
+      setCurrentTool(null);
+      setPendingTool(null);
       setAwaitingApproval(false);
-      setStatusText(isResume ? "处理反馈中..." : "AI 思考中...");
+      setStatusText(isResume ? "正在继续执行..." : "AI 正在思考...");
 
       const config = {
         configurable: { thread_id: THREAD_ID },
         version: "v2" as const,
       };
 
-      let stream;
       try {
-        if (isResume) {
-          stream = await graph.streamEvents(null, config);
-        } else if (text) {
-          stream = await graph.streamEvents({ messages: [new HumanMessage(text)] }, config);
-        }
+        // 如果是恢复执行，传入 null；如果是新消息，传入 HumanMessage
+        const inputs = isResume ? null : { messages: [new HumanMessage(text!)] };
+        const stream = await graph.streamEvents(inputs, config);
 
         if (!stream) return;
 
@@ -122,34 +172,44 @@ export const App = ({ initialMessage }: { initialMessage?: string }) => {
         let fullReasoning = "";
 
         for await (const event of stream) {
-          // 处理模型流式输出
+          // 1. 处理流式生成
           if (event.event === "on_chat_model_stream") {
             const chunk = event.data.chunk;
             
-            // 1. 获取 Reasoning (DeepSeek/OpenAI-o1 适配)
-            const reasoningChunk = chunk.additional_kwargs?.reasoning_content || ""; 
-            if (reasoningChunk) {
-               fullReasoning += reasoningChunk;
-               setCurrentReasoning(fullReasoning);
+            // 提取思考内容 (兼容性处理)
+            let reasoningChunk = "";
+            if (chunk.additional_kwargs?.reasoning_content) {
+               reasoningChunk = chunk.additional_kwargs.reasoning_content;
+            } else if ((chunk as any).reasoning_content) {
+               reasoningChunk = (chunk as any).reasoning_content;
             }
 
-            // 2. 获取正文 Content
+            if (reasoningChunk) {
+              fullReasoning += reasoningChunk;
+              setCurrentReasoning(fullReasoning);
+            }
+
             if (chunk.content && typeof chunk.content === "string") {
-              // 有些模型（如 Ollama 部署的 R1）可能把 <think> 混在 content 里
-              const cleanContent = chunk.content; 
-              fullContent += cleanContent;
+              fullContent += chunk.content;
               setCurrentAIContent(fullContent);
             }
           } 
-          // 处理工具状态
+          // 2. 工具开始
           else if (event.event === "on_tool_start") {
-            setStatusText(`正在调用工具: ${event.name}...`);
-          } else if (event.event === "on_tool_end") {
+            setCurrentTool({ 
+              name: event.name, 
+              input: JSON.stringify(event.data.input) 
+            });
+            setStatusText(`执行工具: ${event.name}...`);
+          } 
+          // 3. 工具结束
+          else if (event.event === "on_tool_end") {
+            setCurrentTool(null); 
             setStatusText("工具执行完毕");
           }
         }
 
-        // 结束后，保存到历史记录
+        // 将本轮对话存入历史
         if (fullContent || fullReasoning) {
           setHistory((prev) => [
             ...prev,
@@ -157,21 +217,27 @@ export const App = ({ initialMessage }: { initialMessage?: string }) => {
               id: generateId(), 
               role: "ai", 
               content: fullContent,
-              reasoning: fullReasoning // ✨ 保存思考过程
+              reasoning: fullReasoning 
             },
           ]);
-          setCurrentAIContent("");
+          setCurrentAIContent(""); // 清空实时显示，转为历史显示
           setCurrentReasoning("");
         }
 
-        // 检查中断
+        // 检查是否因 interrupt 暂停
         const snapshot = await graph.getState(config);
         if (snapshot.next.length > 0) {
           setAwaitingApproval(true);
-          setStatusText(`⚠️ 请求审批。输入 'y' 批准，'n' 拒绝。`);
+          const lastMsg = snapshot.values.messages[snapshot.values.messages.length - 1];
+          if (lastMsg?.tool_calls?.length) {
+            const call = lastMsg.tool_calls[0];
+            setPendingTool({ name: call.name, args: call.args });
+            setStatusText("等待用户批准...");
+          }
         } else {
           setStatusText("");
         }
+
       } catch (e: any) {
         setHistory((prev) => [...prev, { id: generateId(), role: "system", content: `Error: ${e.message}` }]);
       }
@@ -179,171 +245,160 @@ export const App = ({ initialMessage }: { initialMessage?: string }) => {
     { manual: true }
   );
 
-
-  // 2. 拒绝逻辑
-  const { run: rejectExecution, loading: isRejecting } = useRequest(
+  // --- 拒绝逻辑 ---
+  const { run: rejectExecution } = useRequest(
     async () => {
-      setStatusText("正在取消操作...");
+      setStatusText("正在取消...");
       const config = { configurable: { thread_id: THREAD_ID } };
-
       const snapshot = await graph.getState(config);
-      const lastMsg =
-        snapshot.values.messages[snapshot.values.messages.length - 1];
+      const lastMsg = snapshot.values.messages[snapshot.values.messages.length - 1];
 
       if (lastMsg?.tool_calls?.length) {
-        const rejectionMessages = lastMsg.tool_calls.map((tc: any) => {
-          return new ToolMessage({
-            tool_call_id: tc.id,
-            name: tc.name,
-            content: "User rejected the tool execution.", // 注入拒绝信息
-          });
-        });
-
+        const rejectionMessages = lastMsg.tool_calls.map((tc: any) => 
+          new ToolMessage({ tool_call_id: tc.id, name: tc.name, content: "User rejected the tool execution." })
+        );
         await graph.updateState(config, { messages: rejectionMessages });
-
-        setHistory((prev) => [
-          ...prev,
-          {
-            id: generateId(),
-            role: "system",
-            content: "🚫 操作已取消 (User Rejected)",
-          },
-        ]);
-      } else {
-        // Fallback
-        await graph.updateState(config, {
-          messages: [new HumanMessage("Cancel operation")],
-        });
+        setHistory((prev) => [...prev, { id: generateId(), role: "system", content: "🚫 已拒绝执行" }]);
       }
-
-      // 唤醒 AI，silent 模式 
-      sendMessage(null, true);
+      sendMessage(null, true); // 继续运行（让 AI 知道被拒绝了）
     },
-    { manual: true },
+    { manual: true }
   );
 
-  // 初始化
+  // --- 初始化 ---
   useEffect(() => {
     if (initialMessage) {
-      // 初始消息，手动加历史
-      setHistory((prev) => [
-        ...prev,
-        { id: generateId(), role: "user", content: initialMessage },
-      ]);
+      setHistory((prev) => [...prev, { id: generateId(), role: "user", content: initialMessage }]);
       sendMessage(initialMessage);
     }
   }, []);
 
-
-  // 3. 统一入口处理
-  const handleSubmit = (val: string) => {
+  // --- 处理函数 ---
+  const handleUserSubmit = (val: string) => {
     if (!val.trim()) return;
-
-    if (awaitingApproval) {
-      const lowerVal = val.trim().toLowerCase();
-
-      if (["y", "yes"].includes(lowerVal)) {
-        // 同意 -> 手动添加“批准”历史 -> 恢复
-        setHistory((prev) => [
-          ...prev,
-          { id: generateId(), role: "user", content: "✅ 批准执行" },
-        ]);
-        sendMessage(null, true);
-      } else if (["n", "no"].includes(lowerVal)) {
-        // 拒绝 -> 进入拒绝流程 (历史记录在 rejectExecution 里加)
-        rejectExecution();
-      } else {
-        // 打岔 -> 手动添加用户消息 -> 发送新消息
-        setHistory((prev) => [
-          ...prev,
-          { id: generateId(), role: "user", content: val },
-        ]);
-        sendMessage(val, false);
-      }
-    } else {
-      // 正常 -> 手动添加用户消息 -> 发送新消息
-      setHistory((prev) => [
-        ...prev,
-        { id: generateId(), role: "user", content: val },
-      ]);
-      sendMessage(val, false);
-    }
+    setHistory((prev) => [...prev, { id: generateId(), role: "user", content: val }]);
+    sendMessage(val, false);
   };
 
-  const isLoading = isThinking || isRejecting;
+  // ✨ 处理菜单选择
+ const handleApprovalSelect = (value: "approve" | "reject") => {
+   // 防御性编程：虽然理论上菜单出来时 pendingTool 一定有值
+   if (!pendingTool) return;
 
+   if (value === "approve") {
+     // 1. 记录详细的工具调用历史
+     setHistory((prev) => [
+       ...prev,
+       {
+         id: generateId(),
+         role: "system",
+         // 这里实现了你想要的效果：显示工具名 + 状态
+         content: `🛠️ 调用工具: ${pendingTool.name} (✅ 已批准)`,
+       },
+     ]);
+
+     // 2. 继续执行
+     sendMessage(null, true);
+   } else {
+     // 拒绝时的记录
+     setHistory((prev) => [
+       ...prev,
+       {
+         id: generateId(),
+         role: "system",
+         content: `🚫 拒绝调用: ${pendingTool.name}`,
+       },
+     ]);
+
+     rejectExecution();
+   }
+ };
+
+  const isLoading = isThinking;
+
+  // Markdown 渲染包装器
   const MarkdownText = ({ content }: { content: string }) => {
     const formattedText = useMemo(() => {
-      try {
-        return marked(content) || content;
-      } catch {
-        return content;
-      }
+      try { return marked(content) || content; } catch { return content; }
     }, [content]);
     return <Text>{formattedText}</Text>;
   };
 
+  // =========================================
+  // 视图渲染
+  // =========================================
   return (
     <Box flexDirection="column" padding={1}>
-      {/* 1. 历史记录渲染 */}
+      <Header />
+
+      {/* 1. 历史记录区 */}
       <Static items={history}>
         {(item) => (
           <Box key={item.id} flexDirection="column" marginBottom={1}>
             <Box>
               <Text color={item.role === "user" ? "green" : item.role === "ai" ? "cyan" : "red"} bold>
-                {item.role === "user" ? "👤 Human" : item.role === "ai" ? "🤖 AI" : "⚠️ System"}:
+                {item.role === "user" ? "👤 Human" : item.role === "ai" ? "🤖 AI" : "⚙️ System"}:
               </Text>
             </Box>
             <Box marginLeft={2} flexDirection="column">
-              {/* 如果历史消息中有 reasoning，以静态灰盒显示 */}
               {item.role === "ai" && item.reasoning && (
                  <ThinkingPanel content={item.reasoning} isFinished={true} />
               )}
-              
-              {/* 正文内容 */}
               {item.role === "ai" ? <MarkdownText content={item.content} /> : <Text>{item.content}</Text>}
             </Box>
           </Box>
         )}
       </Static>
 
-      {/* 2. 实时生成区域 */}
-      {(isLoading || currentAIContent || currentReasoning) && (
+      {/* 2. 实时活动区 (Thinking / Tool Running) */}
+      {(isLoading || currentAIContent || currentReasoning || currentTool) && (
         <Box flexDirection="column" marginBottom={1} borderStyle="single" borderColor="gray" paddingX={1}>
-          <Box><Text color="cyan" bold>🤖 AI (Processing...):</Text></Box>
+          <Box><Text color="cyan" bold>🤖 AI Generating...</Text></Box>
+          
           <Box marginLeft={2} flexDirection="column">
-            
-            {/* 实时思考过程 - 支持 TAB 交互 */}
-            {currentReasoning && (
-               <ThinkingPanel content={currentReasoning} isFinished={false} />
-            )}
+            {/* 实时思考 */}
+            {currentReasoning && <ThinkingPanel content={currentReasoning} isFinished={false} />}
 
+            {/* 实时工具执行 (紫色转圈) */}
+            {currentTool && (
+              <Box borderStyle="round" borderColor="magenta" paddingX={1} marginY={0} flexDirection="column">
+                 <Text color="magenta" bold><Spinner type="arc" /> 正在调用: {currentTool.name}</Text>
+                 <Text color="magenta" dimColor>   args: {currentTool.input}</Text>
+              </Box>
+            )}
+            
             {/* 实时正文 */}
             <MarkdownText content={currentAIContent} />
           </Box>
         </Box>
       )}
 
-      {/* 3. 输入框区域 */}
-      <Box borderStyle="round" borderColor={awaitingApproval ? "red" : isLoading ? "yellow" : "blue"} flexDirection="column">
+      {/* 3. 底部交互区 (State Machine) */}
+      <Box borderStyle="round" borderColor={awaitingApproval ? "red" : "blue"} flexDirection="column">
+        
+        {/* 场景 A: 正在加载 */}
         {isLoading ? (
-          <Box>
-             {/* 提示用户可以使用 TAB */}
-             {currentReasoning ? (
-                <Text color="yellow"><Spinner type="dots" /> Thinking... (Press TAB to toggle view)</Text>
-             ) : (
-                <Text color="yellow"><Spinner type="dots" /> {statusText}</Text>
-             )}
-          </Box>
-        ) : awaitingApproval ? (
-          <Box>
-            <Text color="red" bold>🛑 确认执行? (y/n) ➤ </Text>
-            <TextInput value={input} onChange={setInput} onSubmit={handleSubmit} />
-          </Box>
-        ) : (
+          <Text color="yellow"><Spinner type="dots" /> {statusText}</Text>
+        ) : 
+        
+        /* 场景 B: 等待审批 (显示菜单按钮) */
+        awaitingApproval && pendingTool ? (
+          <ApprovalCard 
+            tool={pendingTool} 
+            onSelect={handleApprovalSelect} 
+          />
+        ) : 
+        
+        /* 场景 C: 等待用户输入 */
+        (
           <Box>
             <Text color="green" bold>Input ➤ </Text>
-            <TextInput value={input} onChange={setInput} onSubmit={handleSubmit} placeholder="输入指令..." />
+            <TextInput 
+              value={input} 
+              onChange={setInput} 
+              onSubmit={handleUserSubmit} 
+              placeholder="输入指令..." 
+            />
           </Box>
         )}
       </Box>
