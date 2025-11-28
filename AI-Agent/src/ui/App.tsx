@@ -58,34 +58,27 @@ const ThinkingPanel = ({ content, isFinished = false }: { content: string, isFin
 
   // 实时(Running)状态：支持交互
   return (
-    <Box
-      flexDirection="column"
-      borderStyle="round"
-      borderColor="yellow"
-      paddingX={1}
-      marginBottom={1}
-    >
+    <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} marginBottom={1}>
       <Box justifyContent="space-between">
         <Text color="yellow" bold>
-          <Spinner type="dots" /> 🤔 Thinking...
+           <Spinner type="dots" /> 🤔 Thinking... 
         </Text>
         {shouldCollapse && (
           <Text color="gray" dimColor>
-            [{isExpanded ? "TAB to Collapse" : "TAB to Expand"}]
+             [{isExpanded ? "TAB to Collapse" : "TAB to Expand"}]
           </Text>
         )}
       </Box>
 
       {/* 根据折叠状态显示内容 */}
-      {isExpanded || !shouldCollapse ? (
+      {(isExpanded || !shouldCollapse) ? (
         <Box marginTop={1}>
           <Text color="yellow">{content}</Text>
         </Box>
       ) : (
         <Box marginTop={0}>
           <Text color="yellow" dimColor>
-            ... {content.slice(-80).replace(/\n/g, " ")} (Click TAB to view
-            full)
+             ... {content.slice(-80).replace(/n/g, ' ')} (Click TAB to view full)
           </Text>
         </Box>
       )}
@@ -101,6 +94,7 @@ export const App = ({ initialMessage }: { initialMessage?: string }) => {
   const [awaitingApproval, setAwaitingApproval] = useState(false);
 
 
+  // 1. 纯粹的发送逻辑 (不处理 User History)
   const { run: sendMessage, loading: isThinking } = useRequest(
     async (text: string | null, isResume = false) => {
       setInput("");
@@ -128,13 +122,11 @@ export const App = ({ initialMessage }: { initialMessage?: string }) => {
         let fullReasoning = "";
 
         for await (const event of stream) {
-          
           // 处理模型流式输出
           if (event.event === "on_chat_model_stream") {
             const chunk = event.data.chunk;
-           // console.log(JSON.stringify(chunk, null, 2));
-            // 1. 尝试获取 Reasoning (DeepSeek/OpenAI-o1 适配)
-            // 不同框架/模型存放 reasoning 的位置不同，这里做兼容处理
+            
+            // 1. 获取 Reasoning (DeepSeek/OpenAI-o1 适配)
             const reasoningChunk = chunk.additional_kwargs?.reasoning_content || ""; 
             if (reasoningChunk) {
                fullReasoning += reasoningChunk;
@@ -144,7 +136,6 @@ export const App = ({ initialMessage }: { initialMessage?: string }) => {
             // 2. 获取正文 Content
             if (chunk.content && typeof chunk.content === "string") {
               // 有些模型（如 Ollama 部署的 R1）可能把 <think> 混在 content 里
-              // 这里做一个简单的过滤（可选，根据实际模型情况调整）
               const cleanContent = chunk.content; 
               fullContent += cleanContent;
               setCurrentAIContent(fullContent);
@@ -189,6 +180,7 @@ export const App = ({ initialMessage }: { initialMessage?: string }) => {
   );
 
 
+  // 2. 拒绝逻辑
   const { run: rejectExecution, loading: isRejecting } = useRequest(
     async () => {
       setStatusText("正在取消操作...");
@@ -224,7 +216,7 @@ export const App = ({ initialMessage }: { initialMessage?: string }) => {
         });
       }
 
-      // 唤醒 AI，silent 模式 (因为我们刚刚已经手动加了历史记录)
+      // 唤醒 AI，silent 模式 
       sendMessage(null, true);
     },
     { manual: true },
@@ -243,6 +235,7 @@ export const App = ({ initialMessage }: { initialMessage?: string }) => {
   }, []);
 
 
+  // 3. 统一入口处理
   const handleSubmit = (val: string) => {
     if (!val.trim()) return;
 
@@ -320,7 +313,7 @@ export const App = ({ initialMessage }: { initialMessage?: string }) => {
           <Box><Text color="cyan" bold>🤖 AI (Processing...):</Text></Box>
           <Box marginLeft={2} flexDirection="column">
             
-            {/*  实时思考过程 - 支持 TAB 交互 */}
+            {/* 实时思考过程 - 支持 TAB 交互 */}
             {currentReasoning && (
                <ThinkingPanel content={currentReasoning} isFinished={false} />
             )}

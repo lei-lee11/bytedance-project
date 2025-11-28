@@ -1,6 +1,6 @@
-import { ChatOpenAI } from "@langchain/openai";
 import { tools } from "../utils/tools/index.ts";
-export const baseModel = new ChatOpenAI({
+import { ChatDeepSeek } from "@langchain/deepseek";
+export const baseModel = new ChatDeepSeek({
   model: "doubao-seed-1-6-thinking-250715",
   temperature: 0,
   //streaming: false,

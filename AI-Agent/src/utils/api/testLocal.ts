@@ -51,7 +51,7 @@ async function runAndHandleInterrupts(inputs: any, config: any) {
   console.log("助手 (思考中...):");
   for await (const chunk of streamResponse) {
     // 打印图的中间状态，根据需要可以简化打印内容
-    // console.log(JSON.stringify(chunk, null, 2));
+     console.log(chunk);
 
     // 简单的输出过滤，只看最后的消息内容
     const nodeName = Object.keys(chunk)[0];
