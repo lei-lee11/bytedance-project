@@ -494,3 +494,12 @@ export const file_operations = [
     append_to_file,
     write_file
 ];
+
+// 导出各个工具以便测试文件可以导入
+export {
+    read_files,
+    file_exists,
+    list_directory,
+    write_file,
+    append_to_file
+};

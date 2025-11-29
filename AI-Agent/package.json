@@ -17,9 +17,12 @@
     "format": "prettier --write .",
     "lint": "eslint src",
     "format:check": "prettier --check .",
-    "lint:langgraph-json": "node scripts/checkLanggraphPaths.js",
     "lint:all": "yarn lint & yarn lint:langgraph-json & yarn format:check",
-    "test:all": "yarn test && yarn test:int && yarn lint:langgraph"
+    "test:all": "yarn test && yarn test:int && yarn lint:langgraph",
+    "test:storage": "node scripts/run-storage-tests.js",
+    "test:storage:quick": "tsx tests/storage.test.ts",
+    "test:storage:watch": "tsx --watch tests/storage.test.ts",
+    "lint:langgraph-json": "node scripts/checkLanggraphPaths.js"
   },
   "dependencies": {
     "@langchain/community": "^1.0.5",
@@ -38,7 +41,9 @@
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",
     "langchain": "^1.0.6",
+    "proper-lockfile": "^4.1.2",
     "react": "^19.2.0",
+    "uuid": "^9.0.0",
     "zod": "^4.1.12"
   },
   "devDependencies": {
@@ -49,6 +54,7 @@
     "@types/jest": "^29.5.0",
     "@types/minimist": "^1.2.5",
     "@types/react": "^19.2.7",
+    "@types/uuid": "^10.0.0",
     "@typescript-eslint/eslint-plugin": "^5.59.8",
     "@typescript-eslint/parser": "^5.59.8",
     "eslint": "^8.41.0",

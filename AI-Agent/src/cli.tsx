@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 // src/cli.tsx
-import React from "react";
 import { render } from "ink";
-import { App } from "./ui/App.js"; // 注意后缀，ts-node 有时需要处理
+import { App } from "./ui/App.js";
 import minimist from "minimist";
 import { cleanupAllProcesses } from "./utils/tools/backgroundProcess.js";
 
