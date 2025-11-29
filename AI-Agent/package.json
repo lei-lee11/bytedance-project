@@ -22,12 +22,15 @@
     "test:all": "yarn test && yarn test:int && yarn lint:langgraph"
   },
   "dependencies": {
+    "@langchain/community": "^1.0.5",
     "@langchain/core": "^1.0.6",
+    "@langchain/deepseek": "^1.0.2",
     "@langchain/langgraph": "^1.0.2",
     "@langchain/langgraph-checkpoint-mongodb": "^1.0.0",
     "@langchain/langgraph-sdk": "^1.0.0",
     "@langchain/openai": "^1.1.2",
     "ahooks": "^3.9.6",
+    "diff": "^8.0.2",
     "dotenv": "^17.2.3",
     "ink": "^6.5.1",
     "ink-big-text": "^2.0.0",
