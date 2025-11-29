@@ -1,3 +1,7 @@
+// import { ChatOpenAI } from "@langchain/openai";
+// import { tools } from "../utils/tools/index.ts";
+// export const baseModel = new ChatOpenAI({
+//   model: "doubao-seed-1-6-251015",
 import { tools } from "../utils/tools/index.ts";
 import { ChatDeepSeek } from "@langchain/deepseek";
 export const baseModel = new ChatDeepSeek({
