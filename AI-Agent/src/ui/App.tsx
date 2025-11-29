@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { Box, Text, Static } from "ink";
 import TextInput from "ink-text-input";
 import Spinner from "ink-spinner";
 import { useRequest } from "ahooks"; 
-import { HumanMessage, AIMessage } from "@langchain/core/messages";
-import { graph } from "../agent/graph.js";
+import { HumanMessage } from "@langchain/core/messages";
+import { graph } from "../agent/graph.ts";
 
 // 类型定义
 type UIMessage = {
