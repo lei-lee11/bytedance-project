@@ -127,3 +127,6 @@ import path from "path";
 );
 
 export const project_tree_tool = [project_tree];
+
+// 同时导出单个工具实例，供直接 import { project_tree } 使用
+export { project_tree };
