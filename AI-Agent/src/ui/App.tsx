@@ -44,46 +44,27 @@ const Header = () => (
 
 //  组件 2: 思考折叠面板 
 
-const ThinkingPanel = ({ content, isFinished = false }: { content: string, isFinished?: boolean }) => {
-  if (!content) return null;
-
-  // 1. 如果思考已结束，显示一行摘要
-  if (isFinished) {
-    return (
-      <Box flexDirection="column" marginLeft={2} marginBottom={1}>
-         <Text color="gray" dimColor>↳ 💡 思考过程已隐藏 (由 {content.length} 字符组成)</Text>
-      </Box>
-    );
-  }
-
-  // 2. 如果正在思考，截取最后几行 (类似 tail -f 效果)
-  // split('\n') 可能会导致性能问题如果文本极大，但在流式输出中通常没事
-  const lines = content.split('\n');
-  const maxLines = 5; // 只显示最后 5 行
-  
-  const displayLines = lines.length > maxLines 
-    ? lines.slice(-maxLines) 
-    : lines;
-  
-  const isTruncated = lines.length > maxLines;
+const MinimalThinking = ({
+  content,
+  toolName,
+}: {
+  content: string;
+  toolName?: string;
+}) => {
+  // 获取最后一行非空内容作为状态描述
+  const lines = content.split("\n").filter((l) => l.trim());
+  const lastLine =
+    lines.length > 0 ? lines[lines.length - 1].slice(0, 60) : "Thinking...";
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} marginBottom={1}>
-      <Box marginBottom={0}>
-        <Text color="yellow" bold><Spinner type="dots" /> AI 正在思考...</Text>
-      </Box>
-      
-      <Box marginTop={0} flexDirection="column">
-        {/* 如果被截断，显示省略号提示 */}
-        {isTruncated && (
-          <Text color="yellow" dimColor>... (上文省略)</Text>
-        )}
-        
-        {/* 显示最后几行内容 */}
-        {displayLines.map((line, i) => (
-           <Text key={i} color="yellow">{line || " "}</Text>
-        ))}
-      </Box>
+    <Box marginY={1}>
+      <Text color="cyan">
+        <Spinner type="dots" />
+      </Text>
+      <Text color="gray">
+        {" "}
+        {toolName ? `Running ${toolName}...` : lastLine}
+      </Text>
     </Box>
   );
 };
@@ -91,46 +72,131 @@ const ThinkingPanel = ({ content, isFinished = false }: { content: string, isFin
 
 //  组件 3: 工具审批卡片 (核心交互)
 
-const ApprovalCard = ({ 
-  tool, 
-  onSelect 
-}: { 
-  tool: PendingToolState, 
-  onSelect: (choice: 'approve' | 'reject') => void 
+const ApprovalCard = ({
+  tool,
+  onSelect,
+}: {
+  tool: PendingToolState;
+  onSelect: (choice: "approve" | "reject") => void;
 }) => {
-  
   const items = [
-    { label: "✅ 批准执行 (Approve)", value: "approve" },
-    { label: "🚫 拒绝操作 (Reject)", value: "reject" },
+    { label: "Run this command", value: "approve" }, // 英文更简洁，或用 "执行指令"
+    { label: "Abort", value: "reject" },
   ];
 
   return (
-    <Box flexDirection="column" borderStyle="double" borderColor="red" padding={1} marginY={1}>
-      <Box flexDirection="column" marginBottom={1}>
-        <Text color="red" bold>🛑 安全拦截 (Approval Required)</Text>
-        <Text>AI 请求执行外部操作，请审核：</Text>
+    <Box flexDirection="column" marginTop={1} paddingBottom={1}>
+      {/* 标题栏 */}
+      <Box marginBottom={1}>
+        <Text color="yellow" bold>
+          ⚠ Permission Request
+        </Text>
+        <Text color="gray"> › The agent wants to execute an action:</Text>
       </Box>
 
-      {/* 工具详情框 */}
-      <Box flexDirection="column" borderStyle="single" borderColor="gray" paddingX={1} marginBottom={1}>
-        <Text>🛠️ 工具名称: <Text bold color="magenta">{tool.name}</Text></Text>
-        <Box marginTop={1} flexDirection="column">
-          <Text color="gray">参数 Payload:</Text>
-          <Text color="yellow">{JSON.stringify(tool.args, null, 2)}</Text>
+      {/* 拟物化代码块风格 */}
+      <Box
+        flexDirection="column"
+        borderStyle="round"
+        borderColor="gray" // 灰色边框更像编辑器
+        paddingX={1}
+        marginBottom={1}
+        marginLeft={2} // 缩进，体现层级
+      >
+        <Box>
+          <Text color="magenta">fn </Text>
+          <Text bold color="blue">
+            {tool.name}
+          </Text>
+          <Text color="gray">(</Text>
+        </Box>
+
+        {/* 参数格式化显示 */}
+        <Box marginLeft={2} flexDirection="column">
+          {Object.entries(tool.args).map(([key, val]) => (
+            <Box key={key}>
+              <Text color="cyan">{key}</Text>
+              <Text color="gray">: </Text>
+              <Text color="green">"{String(val)}"</Text>
+              <Text color="gray">,</Text>
+            </Box>
+          ))}
+        </Box>
+
+        <Box>
+          <Text color="gray">)</Text>
         </Box>
       </Box>
 
-      {/* 选择菜单 */}
-      <Text bold>请选择操作:</Text>
-      <SelectInput 
-        items={items} 
-        onSelect={(item) => onSelect(item.value as 'approve' | 'reject')}
-      />
+      {/* 菜单 */}
+      <Box marginLeft={2}>
+        <SelectInput
+          items={items}
+          onSelect={(item) => onSelect(item.value as "approve" | "reject")}
+          isFocused={true}
+          // 自定义指示器
+          indicatorComponent={({ isSelected }) => (
+            <Text color={isSelected ? "cyan" : "gray"}>
+              {isSelected ? "● " : "○ "}
+            </Text>
+          )}
+          itemComponent={({ isSelected, label }) => (
+            <Text color={isSelected ? "white" : "gray"} bold={isSelected}>
+              {label}
+            </Text>
+          )}
+        />
+      </Box>
     </Box>
   );
 };
 
+const InputArea = ({
+  onSubmit,
+  isLoading,
+}: {
+  onSubmit: (val: string) => void;
+  isLoading: boolean;
+}) => {
+  const [query, setQuery] = useState("");
 
+  // 如果正在加载，不仅不渲染输入框，还要确保清空状态，防止残影
+  if (isLoading) {
+    return (
+      <Box marginY={1}>
+        <Text color="gray">Wait...</Text>
+      </Box>
+    );
+  }
+
+  return (
+    <Box
+      flexDirection="row"
+      borderStyle="round"
+      borderColor="green"
+      paddingX={1}
+      marginTop={1}
+      // ✨ 关键技巧：尽量保持输入框在界面下方，视觉上贴近输入法候选窗
+    >
+      <Box marginRight={1}>
+        <Text color="green">➜ </Text>
+      </Box>
+
+      <TextInput
+        value={query}
+        onChange={setQuery}
+        onSubmit={(val) => {
+          if (!val.trim()) return;
+          onSubmit(val);
+          setQuery(""); // 提交后清空
+        }}
+        placeholder="在此输入指令 (支持中文)..."
+        // ✨ 确保焦点始终在这里
+        focus={!isLoading}
+      />
+    </Box>
+  );
+};
 // 主程序 App
 export const App = ({ initialMessage }: { initialMessage?: string }) => {
   const [input, setInput] = useState("");
@@ -168,6 +234,7 @@ export const App = ({ initialMessage }: { initialMessage?: string }) => {
 
         if (!stream) return;
 
+        //最终输出
         let fullContent = "";
         let fullReasoning = "";
 
@@ -183,7 +250,8 @@ export const App = ({ initialMessage }: { initialMessage?: string }) => {
             } else if ((chunk as any).reasoning_content) {
                reasoningChunk = (chunk as any).reasoning_content;
             }
-
+            
+            //流式输出
             if (reasoningChunk) {
               fullReasoning += reasoningChunk;
               setCurrentReasoning(fullReasoning);
@@ -323,83 +391,114 @@ export const App = ({ initialMessage }: { initialMessage?: string }) => {
     }, [content]);
     return <Text>{formattedText}</Text>;
   };
+const StatusBadge = ({ role }: { role: string }) => {
+  switch (role) {
+    case "user":
+      return <Text color="green">➜ </Text>;
+    case "ai":
+      return <Text color="cyan">◇ </Text>; // Vercel 风格
+    case "system":
+      return <Text color="gray">│ </Text>;
+    default:
+      return <Text> </Text>;
+  }
+  };
+  
 
   // =========================================
   // 视图渲染
   // =========================================
   return (
-    <Box flexDirection="column" padding={1}>
+    <Box flexDirection="column" height="100%" padding={1}>
       <Header />
+      {/* 1. 顶部：历史记录和 Logo  */}
+      <Box flexDirection="column" flexGrow={1}>
+        {/* Logo */}
+        <Box marginBottom={1}>
+          <Text color="green" bold>
+            CUSTOM CLI v1.0
+          </Text>
+        </Box>
 
-      {/* 1. 历史记录区 */}
-      <Static items={history}>
-        {(item) => (
-          <Box key={item.id} flexDirection="column" marginBottom={1}>
+        {/* 历史记录 */}
+        <Static items={history}>
+          {(item) => (
+            <Box key={item.id} flexDirection="row" marginBottom={1}>
+              {/* 左侧图标列，保持对齐 */}
+              <Box width={2} marginRight={1}>
+                <StatusBadge role={item.role} />
+              </Box>
+
+              {/* 右侧内容列 */}
+              <Box flexDirection="column" flexGrow={1}>
+                {/* 如果是 System 消息（比如工具调用结果），用灰色显示，更像日志 */}
+                {item.role === "system" ? (
+                  <Text color="gray" dimColor>
+                    {item.content}
+                  </Text>
+                ) : (
+                  // AI 和 User 消息正常显示
+                  <Box flexDirection="column">
+                    {item.role === "ai" && item.reasoning && (
+                      // 思考过程：折叠且灰色，不抢眼
+                      <Text color="gray" dimColor>
+                        ↳ 🧠 {item.reasoning.slice(0, 50)}... (Thought process
+                        hidden)
+                      </Text>
+                    )}
+                    {item.role === "ai" ? (
+                      <MarkdownText content={item.content} />
+                    ) : (
+                      <Text bold>{item.content}</Text>
+                    )}
+                  </Box>
+                )}
+              </Box>
+            </Box>
+          )}
+        </Static>
+      </Box>
+
+      {/* 2. 实时活动区 (Thinking / Tool Running) */}
+      <Box flexDirection="column">
+        {(isLoading || currentAIContent || currentReasoning || currentTool) && (
+          <Box
+            flexDirection="column"
+            marginBottom={1}
+            borderStyle="single"
+            borderColor="gray"
+            paddingX={1}
+          >
             <Box>
-              <Text color={item.role === "user" ? "green" : item.role === "ai" ? "cyan" : "red"} bold>
-                {item.role === "user" ? "👤 Human" : item.role === "ai" ? "🤖 AI" : "⚙️ System"}:
+              <Text color="cyan" bold>
+                🤖 AI Generating...
               </Text>
             </Box>
+
             <Box marginLeft={2} flexDirection="column">
-              {item.role === "ai" && item.reasoning && (
-                 <ThinkingPanel content={item.reasoning} isFinished={true} />
+              {/* 实时思考 */}
+              {(currentReasoning || currentTool) && (
+                <MinimalThinking
+                  content={currentReasoning}
+                  toolName={currentTool?.name}
+                />
               )}
-              {item.role === "ai" ? <MarkdownText content={item.content} /> : <Text>{item.content}</Text>}
+
+              {/* 实时正文 */}
+              {currentAIContent && <MarkdownText content={currentAIContent} />}
             </Box>
           </Box>
         )}
-      </Static>
-
-      {/* 2. 实时活动区 (Thinking / Tool Running) */}
-      {(isLoading || currentAIContent || currentReasoning || currentTool) && (
-        <Box flexDirection="column" marginBottom={1} borderStyle="single" borderColor="gray" paddingX={1}>
-          <Box><Text color="cyan" bold>🤖 AI Generating...</Text></Box>
-          
-          <Box marginLeft={2} flexDirection="column">
-            {/* 实时思考 */}
-            {currentReasoning && <ThinkingPanel content={currentReasoning} isFinished={false} />}
-
-            {/* 实时工具执行 (紫色转圈) */}
-            {currentTool && (
-              <Box borderStyle="round" borderColor="magenta" paddingX={1} marginY={0} flexDirection="column">
-                 <Text color="magenta" bold><Spinner type="arc" /> 正在调用: {currentTool.name}</Text>
-                 <Text color="magenta" dimColor>   args: {currentTool.input}</Text>
-              </Box>
-            )}
-            
-            {/* 实时正文 */}
-            <MarkdownText content={currentAIContent} />
-          </Box>
-        </Box>
-      )}
+      </Box>
 
       {/* 3. 底部交互区 (State Machine) */}
-      <Box borderStyle="round" borderColor={awaitingApproval ? "red" : "blue"} flexDirection="column">
-        
-        {/* 场景 A: 正在加载 */}
-        {isLoading ? (
-          <Text color="yellow"><Spinner type="dots" /> {statusText}</Text>
-        ) : 
-        
-        /* 场景 B: 等待审批 (显示菜单按钮) */
-        awaitingApproval && pendingTool ? (
-          <ApprovalCard 
-            tool={pendingTool} 
-            onSelect={handleApprovalSelect} 
-          />
-        ) : 
-        
-        /* 场景 C: 等待用户输入 */
-        (
-          <Box>
-            <Text color="green" bold>Input ➤ </Text>
-            <TextInput 
-              value={input} 
-              onChange={setInput} 
-              onSubmit={handleUserSubmit} 
-              placeholder="输入指令..." 
-            />
-          </Box>
+      <Box marginTop={1}>
+        {awaitingApproval ? (
+          // 如果在审批，显示审批卡片
+          <ApprovalCard tool={pendingTool!} onSelect={handleApprovalSelect} />
+        ) : (
+          // 否则显示输入框
+          <InputArea onSubmit={handleUserSubmit} isLoading={isLoading} />
         )}
       </Box>
     </Box>
