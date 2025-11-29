@@ -1,7 +1,9 @@
 /**
- * 简单的 Diff 生成器
- * 生成类似 unified diff 格式的输出
+ * Diff 生成器
+ * 使用智能 diff 算法，只显示真正内容有变化的差异
  */
+
+import * as Diff from 'diff';
 
 interface DiffLine {
   type: 'add' | 'remove' | 'context';
@@ -17,7 +19,7 @@ export class DiffGenerator {
     oldContent: string,
     newContent: string,
     fileName: string,
-    contextLines: number = 3
+    contextLines = 3
   ): string {
     const oldLines = oldContent.split('\n');
     const newLines = newContent.split('\n');
@@ -28,62 +30,39 @@ export class DiffGenerator {
 
   /**
    * 计算两个文本之间的差异
+   * 使用智能 diff 算法，只标记真正改变的内容
    */
   private computeDiff(oldLines: string[], newLines: string[]): DiffLine[] {
     const diffs: DiffLine[] = [];
     
-    // 简单的逐行对比算法
-    let oldIndex = 0;
-    let newIndex = 0;
-
-    while (oldIndex < oldLines.length || newIndex < newLines.length) {
-      if (oldIndex >= oldLines.length) {
-        // 剩余的都是新增行
-        diffs.push({
-          type: 'add',
-          content: newLines[newIndex],
-          lineNumber: newIndex + 1,
+    // 使用 diff 库的智能算法
+    const changes = Diff.diffArrays(oldLines, newLines);
+    
+    for (const change of changes) {
+      if (change.added) {
+        // 真正新增的行
+        change.value.forEach(line => {
+          diffs.push({ type: 'add', content: line });
         });
-        newIndex++;
-      } else if (newIndex >= newLines.length) {
-        // 剩余的都是删除行
-        diffs.push({
-          type: 'remove',
-          content: oldLines[oldIndex],
-          lineNumber: oldIndex + 1,
+      } else if (change.removed) {
+        // 真正删除的行
+        change.value.forEach(line => {
+          diffs.push({ type: 'remove', content: line });
         });
-        oldIndex++;
-      } else if (oldLines[oldIndex] === newLines[newIndex]) {
-        // 相同的行
-        diffs.push({
-          type: 'context',
-          content: oldLines[oldIndex],
-          lineNumber: oldIndex + 1,
-        });
-        oldIndex++;
-        newIndex++;
       } else {
-        // 不同的行 - 简单处理为先删除后添加
-        diffs.push({
-          type: 'remove',
-          content: oldLines[oldIndex],
-          lineNumber: oldIndex + 1,
+        // 未变化的上下文行
+        change.value.forEach(line => {
+          diffs.push({ type: 'context', content: line });
         });
-        diffs.push({
-          type: 'add',
-          content: newLines[newIndex],
-          lineNumber: newIndex + 1,
-        });
-        oldIndex++;
-        newIndex++;
       }
     }
-
+    
     return diffs;
   }
 
   /**
    * 格式化 diff 输出
+   * 只显示变更周围的上下文行
    */
   private formatDiff(diffs: DiffLine[], fileName: string, contextLines: number): string {
     const lines: string[] = [];
@@ -92,26 +71,70 @@ export class DiffGenerator {
     lines.push(`+++ b/${fileName}`);
     lines.push('');
 
-    // 简化版本：显示所有差异
-    let hasChanges = false;
-    for (const diff of diffs) {
-      if (diff.type === 'remove') {
-        lines.push(`- ${diff.content}`);
-        hasChanges = true;
-      } else if (diff.type === 'add') {
-        lines.push(`+ ${diff.content}`);
-        hasChanges = true;
-      } else if (hasChanges) {
-        // 只在有变更时才显示上下文
-        lines.push(`  ${diff.content}`);
+    // 1. 找出所有变更的位置
+    const changeIndices: number[] = [];
+    diffs.forEach((diff, index) => {
+      if (diff.type === 'add' || diff.type === 'remove') {
+        changeIndices.push(index);
       }
-    }
+    });
 
-    if (!hasChanges) {
+    if (changeIndices.length === 0) {
       return '(没有差异)';
     }
 
-    return lines.join('\n');
+    // 2. 计算需要显示的行范围（合并相近的变更块）
+    const ranges: Array<{ start: number; end: number }> = [];
+    
+    for (const changeIndex of changeIndices) {
+      const start = Math.max(0, changeIndex - contextLines);
+      const end = Math.min(diffs.length - 1, changeIndex + contextLines);
+      
+      // 如果新范围与上一个范围重叠或相邻，合并它们
+      if (ranges.length > 0 && start <= ranges[ranges.length - 1].end + 1) {
+        ranges[ranges.length - 1].end = Math.max(ranges[ranges.length - 1].end, end);
+      } else {
+        ranges.push({ start, end });
+      }
+    }
+
+    // 3. 输出各个变更块
+    for (const range of ranges) {
+      // 计算行号信息用于 @@ 标记
+      let oldLineStart = 0;
+      let newLineStart = 0;
+      let oldLineCount = 0;
+      let newLineCount = 0;
+      
+      for (let i = 0; i < range.start; i++) {
+        if (diffs[i].type !== 'add') oldLineStart++;
+        if (diffs[i].type !== 'remove') newLineStart++;
+      }
+      
+      for (let i = range.start; i <= range.end; i++) {
+        if (diffs[i].type !== 'add') oldLineCount++;
+        if (diffs[i].type !== 'remove') newLineCount++;
+      }
+      
+      // 添加 @@ 标记
+      lines.push(`@@ -${oldLineStart + 1},${oldLineCount} +${newLineStart + 1},${newLineCount} @@`);
+      
+      // 输出这个范围内的所有行
+      for (let i = range.start; i <= range.end; i++) {
+        const diff = diffs[i];
+        if (diff.type === 'remove') {
+          lines.push(`- ${diff.content}`);
+        } else if (diff.type === 'add') {
+          lines.push(`+ ${diff.content}`);
+        } else {
+          lines.push(`  ${diff.content}`);
+        }
+      }
+      
+      lines.push(''); // 空行分隔不同的变更块
+    }
+
+    return lines.join('\n').trim();
   }
 
   /**
@@ -144,23 +167,22 @@ export class DiffGenerator {
 
   /**
    * 生成简洁的变更摘要
+   * 基于智能 diff 算法的准确统计
    */
   generateSummary(oldContent: string, newContent: string): string {
     const oldLines = oldContent.split('\n');
     const newLines = newContent.split('\n');
 
+    const diffs = this.computeDiff(oldLines, newLines);
+
     let additions = 0;
     let deletions = 0;
 
-    const maxLen = Math.max(oldLines.length, newLines.length);
-    for (let i = 0; i < maxLen; i++) {
-      if (i >= oldLines.length) {
+    for (const diff of diffs) {
+      if (diff.type === 'add') {
         additions++;
-      } else if (i >= newLines.length) {
+      } else if (diff.type === 'remove') {
         deletions++;
-      } else if (oldLines[i] !== newLines[i]) {
-        deletions++;
-        additions++;
       }
     }
 

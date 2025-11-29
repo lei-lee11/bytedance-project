@@ -131,17 +131,17 @@ const editCodeSnippet = new DynamicStructuredTool({
         return result;
       }
       
-      // 6. 语法检查
-      const lang = language || syntaxChecker.detectLanguage(file_path);
-      const syntaxResult = await syntaxChecker.checkSyntax(newContent, lang);
+      // // 6. 语法检查
+      // const lang = language || syntaxChecker.detectLanguage(file_path);
+      // const syntaxResult = await syntaxChecker.checkSyntax(newContent, lang);
       
-      result += syntaxChecker.formatResult(syntaxResult) + '\n\n';
+      // result += syntaxChecker.formatResult(syntaxResult) + '\n\n';
       
-      if (!syntaxResult.valid) {
-        result += `⚠️ 语法检查未通过，建议修复后再试\n`;
-        result += `如果确定要继续，请重新调用并添加确认`;
-        return result;
-      }
+      // if (!syntaxResult.valid) {
+      //   result += `⚠️ 语法检查未通过，建议修复后再试\n`;
+      //   result += `如果确定要继续，请重新调用并添加确认`;
+      //   return result;
+      // }
       
       // 7. 创建备份
       const backupPath = await backupManager.createBackup(resolvedPath);

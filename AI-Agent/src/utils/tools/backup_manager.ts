@@ -2,7 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 
 export class BackupManager {
-  private readonly MAX_BACKUPS = 10;
+  private readonly MAX_BACKUPS = 1;
   private readonly BACKUP_SUFFIX = '.backup.';
 
   /**
