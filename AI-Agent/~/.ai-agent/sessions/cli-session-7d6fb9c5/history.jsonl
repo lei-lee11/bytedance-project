@@ -1,0 +1,6 @@
+{"timestamp":1764525007710,"event_type":"session_created","content":"Session Started","display_priority":"high","metadata":{"title":"CLI Session"}}
+{"event_type":"user_message","content":"hello","display_priority":"high","metadata":{},"timestamp":1764525018921}
+{"event_type":"ai_response","content":"Hello! How can I assist you today?","display_priority":"high","metadata":{"reasoning":"用户只是说\"hello\"，这是一个问候语，不需要调用任何工具，直接回复问候即可。"},"timestamp":1764525021199}
+{"event_type":"tool_call","content":"Turn completed","display_priority":"medium","metadata":{"tool_name":"checkpoint_save","checkpoint_id":"ckpt_021284","step_type":"agent","tags":[],"message_count":2},"timestamp":1764525021350}
+{"event_type":"session_updated","content":"=== Session List ===ID: 6fb9c5 | CLI Session | Msgs: 2\nID: f3994c | CLI Session | Msgs: 34Use /switch <id> to change session.","display_priority":"medium","metadata":{},"timestamp":1764525060217}
+{"event_type":"session_updated","content":"=== Session List ===ID: 6fb9c5 | CLI Session | Msgs: 2\nID: f3994c | CLI Session | Msgs: 34Use /switch <id> to change session.","display_priority":"medium","metadata":{},"timestamp":1764525290316}
