@@ -25,3 +25,4 @@ file_operation.test.ts
 
 .idea/
 document
+storage.test.ts

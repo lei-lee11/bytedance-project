@@ -1,36 +1,51 @@
+/**
+ * Nodes implementation.
+ * Prompts/templates are centralized in `src/agent/prompt.ts`.
+ * Keep prompts in that file and call the builder functions from nodes.
+ */
 import {
   SystemMessage,
   RemoveMessage,
   HumanMessage,
 } from "@langchain/core/messages";
+import {
+  buildParseUserInputPrompt,
+  buildSummarizePrompt,
+  buildCodeWithTestPlanPrompt,
+  buildUnitTestOnlyPrompt,
+  buildReviewPrompt,
+} from "./prompt.ts";
 import { AgentState } from "./state.js";
 import { baseModel, modelWithTools } from "../config/model.js";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
-import { Command } from "@langchain/langgraph";
+// import { Command } from "@langchain/langgraph";
 import { z } from "zod";
+// 简单的代码审查结构化输出 schema，供 reviewCode 节点使用（避免导入时 ReferenceError）
+const CodeReviewSchema = z.object({
+  decision: z.enum(["pass", "fail"]),
+  issues: z.string().optional(),
+});
+
+// 从模型生成的文本中尝试提取测试计划（简单实现：查找 '### Step 2' 后的内容）
+function extractTestPlan(text: unknown): string | undefined {
+  if (typeof text !== "string") return undefined;
+  const marker = "### Step 2";
+  const idx = text.indexOf(marker);
+  if (idx === -1) return undefined;
+  return text.slice(idx);
+}
 import { tools } from "../utils/tools/index.ts";
+import { randomUUID } from "crypto";
 const MAX_RETRIES = 5;
+import { project_tree } from "../utils/tools/project_tree.ts";
 
 //解析用户输入，提取用户意图
 export const parseUserInput = async (state: AgentState) => {
-  // 使用LLM总结对话历史，提取用户意图
-  const parsePrompt = [
-    new SystemMessage({
-      content: `你是一个任务解析器。请根据完整的对话上下文，提取当前用户的编程意图。当前对话历史：
-${state.messages
-  .map(
-    (msg) => `[${msg.type === "human" ? "User" : "Assistant"}]: ${msg.content}`,
-  )
-  .join("\n")}
+  const historyText = state.messages
+    .map((msg) => `[${msg.type === "human" ? "User" : "Assistant"}]: ${msg.content}`)
+    .join("\n");
 
-请输出以下字段（即使与之前相同也需显式写出）：
-- currentTask: 当前要实现的功能（必须明确，不可省略）
-- programmingLanguage: 目标编程语言
-- codeContext: 相关代码片段（若无则为空字符串）
-输出严格 JSON，不要任何其他内容。`,
-    }),
-    // 注意：不再单独加 HumanMessage，因为历史已包含
-  ];
+  const parsePrompt = [new SystemMessage({ content: buildParseUserInputPrompt(historyText) })];
   const response = await baseModel.invoke(parsePrompt);
   const parsed = JSON.parse(response.content as string);
   return {
@@ -39,40 +54,30 @@ ${state.messages
     codeContext: parsed.codeContext?.trim() || "",
   };
 };
+
+
 // 总结对话历史，截取最新6条message
 export const summarizeConversation = async (state: AgentState) => {
   // 首先获取现有的摘要
   const summary = state.summary || "";
 
-  // 创建摘要提示词
-  let summaryMessage: string;
-  if (summary) {
-    // 已存在摘要
-    summaryMessage =
-      `这是截至目前的对话摘要: ${summary}\n\n` +
-      "请根据以上新消息扩展此摘要，重点关注编程任务和代码内容:";
-  } else {
-    summaryMessage =
-      "请为以上对话创建一个摘要，需包含:\n" +
-      "1. 主要编程任务和目标\n" +
-      "2. 使用的编程语言和技术栈\n" +
-      "3. 关键代码片段或解决方案\n" +
-      "4. 重要决策和结论\n" +
-      "请保持摘要简洁但信息完整:";
-  }
+  // 摘要提示由 prompt builder 生成
 
-  // 将提示词添加到对话历史中
-  const messages = [
-    ...state.messages,
-    new HumanMessage({ content: summaryMessage }),
-  ];
+  // 将提示词添加到对话历史中（使用 prompt builder）
+  const promptText = buildSummarizePrompt(summary);
+  const messages = [...state.messages, new HumanMessage({ content: promptText })];
   const response = await baseModel.invoke(messages);
 
-  // 删除除最后2条外的所有消息
+  // 删除除最后2条外的所有消息（保留原逻辑）
   const deleteMessages = state.messages
     .slice(0, -2)
-    .filter((m) => m.id !== undefined)
-    .map((m) => new RemoveMessage({ id: m.id! }));
+    .reduce((acc: RemoveMessage[], m) => {
+      if (m && typeof (m as { id?: unknown }).id === "string") {
+        const id = (m as { id?: string }).id as string;
+        acc.push(new RemoveMessage({ id }));
+      }
+      return acc;
+    }, []);
 
   return {
     summary: response.content,
@@ -80,36 +85,133 @@ export const summarizeConversation = async (state: AgentState) => {
   };
 };
 
+
+//扫描项目结构
+export const injectProjectTreeNode = async (state: AgentState) => {
+  // 如果不需要更新就直接返回
+  if (state.projectTreeInjected) {
+    return {};
+  }
+
+  const root = state.projectRoot || ".";
+  const treeText = await project_tree.invoke({
+    root_path: root,
+    max_depth: -1,
+    include_hidden: false,
+    include_files: true,
+    max_entries: 3000,
+  });
+
+  const systemMsg = new SystemMessage({
+    content: `下面是当前项目的目录结构（已做截断，请在写代码时遵循该结构）：
+
+${treeText}`,
+  });
+
+  // 给这条 system 消息记录一个可追踪 id（也可以直接用 systemMsg.id，如果 LangChain 已经生成了）
+  const generatedId =
+    typeof randomUUID === "function"
+      ? randomUUID()
+      : `project-tree-${Date.now()}`;
+
+  // 设置 message id（部分 Message 实现可能不暴露 setter）
+  try {
+    (systemMsg as unknown as { id?: string }).id = generatedId;
+  } catch {
+    // ignore if not writable
+  }
+
+  // 如果之前有项目结构的 message，生成对应的删除指令
+  const deletes = state.projectTreeMessageId
+    ? [new RemoveMessage({ id: state.projectTreeMessageId })]
+    : [];
+
+  return {
+    // ❗这里是关键：只返回删除 + 新消息，不要再拼 state.messages
+    messages: [
+      ...deletes,  // 删除旧的
+      systemMsg,   // 加新的
+    ],
+    projectTreeText: treeText,
+    projectTreeMessageId: generatedId,
+    projectTreeInjected: true,
+  };
+};
+
+
+
 // 生成代码，根据用户意图和上下文
 export const generateCode = async (state: AgentState) => {
   const { messages, currentTask, programmingLanguage, codeContext } = state;
 
-  // 构建专门用于代码生成的提示
-  const codePrompt = [
-    new SystemMessage({
-      content: `你是一个专业的编程助手，专注于生成高质量的${programmingLanguage}代码。
-任务描述: ${currentTask}
-代码上下文: ${codeContext}
-请只返回可执行的代码，不要包含任何解释性文字。`,
-    }),
-    ...messages,
-  ];
+  const promptText = buildCodeWithTestPlanPrompt({
+    currentTask,
+    programmingLanguage,
+    codeContext,
+  });
 
+  const codePrompt = [new SystemMessage({ content: promptText }), ...messages];
   const response = await baseModel.invoke(codePrompt);
-  return { messages: [...messages, response] }; //reduce的原理
-};
-export const CodeReviewSchema = z.object({
-  decision: z
-    .enum(["pass", "fail"])
-    .describe("审查结论：'pass' 表示代码合格，'fail' 表示不合格"),
 
-  reason: z
-    .string()
-    .optional()
-    .describe(
-      "仅当 decision 为 'fail' 时填写，说明代码存在的问题（如语法错误、未实现功能、包含解释文字等）",
-    ),
-});
+  let testPlanText: string | undefined;
+  if (typeof response.content === "string") {
+    testPlanText = extractTestPlan(response.content);
+  }
+
+  return {
+    messages: [...messages, response],
+    testPlanText, 
+  };
+};
+
+
+
+// 专门生成单元测试的节点
+export const generateTests = async (state: AgentState) => {
+  const {
+    messages,
+    currentTask,
+    programmingLanguage,
+    codeContext,
+    testPlanText, // 我们在 StateAnnotation 里刚加的那个字段
+  } = state;
+
+  // 1. 确定“待测代码”
+  let codeUnderTest = (codeContext || "").trim();
+
+  // 如果 codeContext 里没有，就退回去找「最近一条 AI 消息」
+  if (!codeUnderTest) {
+    const lastAiMsg = [...messages].reverse().find((m) => m.type === "ai");
+    if (lastAiMsg && typeof lastAiMsg.content === "string") {
+      codeUnderTest = lastAiMsg.content;
+    }
+  }
+
+  // 兜底：实在找不到，就让模型基于任务描述设计测试
+  if (!codeUnderTest) {
+    codeUnderTest = "（当前上下文中没有明确的实现代码，可根据任务描述和函数约定设计测试。）";
+  }
+
+  // 2. 构造 Prompt —— 把之前的测试计划（如果有）一起传进去
+  const promptText = buildUnitTestOnlyPrompt({
+    currentTask,
+    programmingLanguage,
+    codeUnderTest,
+    // 这里就是我们刚才说的 existingTestPlan，可选
+    existingTestPlan: testPlanText,
+  } as any); // 如果你的 buildUnitTestOnlyPrompt 还没更新签名，这里可以先去改它
+
+  const systemMsg = new SystemMessage({ content: promptText });
+
+  const response = await baseModel.invoke([systemMsg]);
+
+  return {
+    messages: [...messages, response],
+  };
+};
+
+
+
 // 审查代码，判断是否符合要求
 export const reviewCode = async (state: AgentState) => {
   const { messages, currentTask, programmingLanguage, retryCount } = state;
@@ -122,24 +224,8 @@ export const reviewCode = async (state: AgentState) => {
   }
   const generatedCode = lastAIMessage.content as string;
   const structuredModel = baseModel.withStructuredOutput(CodeReviewSchema);
-  const reviewPrompt = [
-    new SystemMessage({
-      content: `你是一个严格的代码审查专家。
-请根据以下要求评估用户提供的代码：
-- 编程任务：${currentTask}
-- 目标语言：${programmingLanguage}
-审查标准：
-1. 代码是否完整实现了任务？
-2. 是否使用了正确的编程语言？
-3. 语法是否正确（能否编译/运行）？
-4. 是否只包含纯代码？禁止包含任何解释性文字、注释（除非必要）、Markdown 围栏（如 \`\`\`cpp）等非代码内容。
-请严格按照指定 JSON 格式输出，不要包含任何额外文本、说明或 Markdown。`,
-    }),
-
-    new HumanMessage({
-      content: `代码如下：\n\n${generatedCode}`,
-    }),
-  ];
+  const { system, human } = buildReviewPrompt({ currentTask, programmingLanguage, generatedCode });
+  const reviewPrompt = [new SystemMessage({ content: system }), new HumanMessage({ content: human })];
   const reviewResult = await structuredModel.invoke(reviewPrompt);
   const isPass = reviewResult.decision === "pass";
   if (isPass) {
@@ -165,14 +251,22 @@ export const reviewCode = async (state: AgentState) => {
 
 export const toolNode = new ToolNode(tools);
 export const agent = async (state: AgentState) => {
-  const { messages } = state;
+  let { messages } = state;
+  const { summary } = state;
+  if (summary) {
+    const systemMessage = new SystemMessage({
+      content: `Summary of conversation earlier: ${summary}`,
+    });
+    messages = [systemMessage, ...messages];
+  }
   const response = await modelWithTools.invoke(messages);
   return { messages: [...messages, response] };
 };
-export const humanReviewNode = async (state: AgentState) => {
+export const humanReviewNode = async (_state: AgentState) => {
   // 这里可以处理人工的输入。
   // 比如：如果人工在这个阶段修改了 State（例如取消了 tool_calls），可以在这里处理。
   // 简单起见，这里只是一个传递节点。
   console.log("--- 人工已审批，继续执行 ---");
   return {};
 };
+

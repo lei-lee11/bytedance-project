@@ -27,3 +27,7 @@ dist
 file_operation.test.ts
 
 CLAUDE.md
+
+storage.test.ts
+
+test-storage-temp

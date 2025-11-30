@@ -127,3 +127,6 @@ import path from "path";
 );
 
 export const project_tree_tool = [project_tree];
+
+// Also export the function directly for compatibility
+export { project_tree };
