@@ -46,17 +46,17 @@ async function routeAgentOutput(state: AgentState) {
 const workflow = new StateGraph(StateAnnotation)
   .addNode("summarize", summarizeConversation)
   .addNode("agent", agent)
-  .addNode("tool", toolNode)
+  .addNode("toolNode", toolNode) // 使用与导出变量相同的节点名称
   .addNode("human_review", humanReviewNode)
   .addEdge(START, "agent")
   .addConditionalEdges("agent", routeAgentOutput, {
-    toolNode: "tool", // 安全工具 -> 直接执行
+    toolNode: "toolNode", // 安全工具 -> 直接执行
     human_review: "human_review", // 敏感工具 -> 去审批
     summarize: "summarize",
     [END]: END,
   })
-  .addEdge("human_review", "tool")
-  .addEdge("tool", "agent")
+  .addEdge("human_review", "toolNode") // 更新边连接
+  .addEdge("toolNode", "agent") // 更新边连接
   .addEdge("summarize", END);
 export const graph = workflow.compile({
   checkpointer: checkpointer,
