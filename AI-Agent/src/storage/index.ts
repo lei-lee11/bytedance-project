@@ -3,16 +3,17 @@ export * from './types.js';
 
 // 核心类
 export { FileManager } from './fileManager.js';
-export { SessionManager } from './sessionManager.js';
+export { SessionManagerWithLock } from './sessionManagerWithLock.js';
 export { HistoryManager } from './historyManager.js';
-export { CheckpointManager } from './checkpointManager.js';
+export { LockManager } from './lockManagerSimple.js';
+// export { CheckpointManager } from './checkpointManager.js'; // 已注释，高级检查点功能暂不使用
 
 // 工具函数
 export * from './utils.js';
 
-import { SessionManager } from './sessionManager.js';
+import { SessionManagerWithLock } from './sessionManagerWithLock.js';
 import { HistoryManager } from './historyManager.js';
-import { CheckpointManager } from './checkpointManager.js';
+// import { CheckpointManager } from './checkpointManager.js'; // 已注释，使用 SessionManager 的检查点功能
 import { FileManager } from './fileManager.js';
 import { StorageConfig } from './types.js';
 
@@ -21,17 +22,15 @@ import { StorageConfig } from './types.js';
  * 提供所有存储功能的统一入口
  */
 export class StorageSystem {
-  private sessionManager: SessionManager;
+  private sessionManager: SessionManagerWithLock;
   private historyManager: HistoryManager;
-  private checkpointManager: CheckpointManager;
   private fileManager: FileManager;
   private isInitialized = false;
 
   constructor(config?: Partial<StorageConfig>) {
     this.fileManager = new FileManager(config);
-    this.sessionManager = new SessionManager(config);
+    this.sessionManager = new SessionManagerWithLock(config);
     this.historyManager = new HistoryManager(this.sessionManager);
-    this.checkpointManager = new CheckpointManager(this.sessionManager);
   }
 
   /**
@@ -65,14 +64,28 @@ export class StorageSystem {
     return this.historyManager;
   }
 
-  // 检查点管理
+  // 检查点管理 - 直接使用 SessionManager
   get checkpoints() {
-    return this.checkpointManager;
+    return this.sessionManager;
   }
 
   // 文件管理
   get files() {
     return this.fileManager;
+  }
+
+  /**
+   * 获取锁状态（用于调试和监控）
+   */
+  getLockStatus() {
+    return this.sessionManager.getLockStatus();
+  }
+
+  /**
+   * 强制释放所有锁（错误恢复）
+   */
+  forceReleaseAllLocks(): void {
+    this.sessionManager.forceReleaseAllLocks();
   }
 
   /**
@@ -82,7 +95,6 @@ export class StorageSystem {
     totalSessions: number;
     activeSessions: number;
     archivedSessions: number;
-    completedSessions: number;
     totalCheckpoints: number;
     totalHistoryRecords: number;
     totalStorageSize: number;
@@ -114,14 +126,12 @@ export class StorageSystem {
 
     const activeSessions = sessions.filter(s => s.metadata.status === 'active').length;
     const archivedSessions = sessions.filter(s => s.metadata.status === 'archived').length;
-    const completedSessions = sessions.filter(s => s.metadata.status === 'completed').length;
     const averageSessionAge = ages.length > 0 ? ages.reduce((a, b) => a + b, 0) / ages.length : 0;
 
     return {
       totalSessions: sessions.length,
       activeSessions,
       archivedSessions,
-      completedSessions,
       totalCheckpoints,
       totalHistoryRecords,
       totalStorageSize,
@@ -194,6 +204,12 @@ export class StorageSystem {
 
       if (systemStats.archivedSessions > systemStats.activeSessions * 2) {
         recommendations.push('归档会话数量较多，建议删除不需要的会话');
+      }
+
+      // 检查锁状态
+      const lockStatus = this.getLockStatus();
+      if (lockStatus.totalLocks > 10) {
+        recommendations.push(`当前活动锁数量较多 (${lockStatus.totalLocks})，可能存在死锁风险`);
       }
 
     } catch (error) {
@@ -269,14 +285,12 @@ export class StorageSystem {
         historyRecordsDeleted += historyResult.deleted;
       }
 
-      // 清理检查点
+      // 清理检查点 - 使用 SessionManager 的基本清理功能
       if (sessionInfo.checkpointCount > maxCheckpoints) {
-        const checkpointResult = await this.checkpointManager.cleanupCheckpoints(threadId, {
-          keepCount: maxCheckpoints,
-          olderThanDays
-        });
-        checkpointsDeleted += checkpointResult.deletedCount;
-        spaceFreed += checkpointResult.totalSpaceFreed;
+        // 简单的检查点数量限制，通过文件管理器直接清理
+        await this.fileManager.cleanupOldCheckpoints(threadId, maxCheckpoints);
+        checkpointsDeleted += Math.max(0, sessionInfo.checkpointCount - maxCheckpoints);
+        spaceFreed += Math.max(0, sessionInfo.checkpointCount - maxCheckpoints) * 2048; // 估算大小
       }
 
       // 对于长时间未更新的会话进行归档
@@ -339,7 +353,8 @@ export class StorageSystem {
    * 关闭存储系统
    */
   async close(): Promise<void> {
-    // 这里可以添加任何必要的清理工作
+    // 强制释放所有锁，防止资源泄露
+    this.forceReleaseAllLocks();
     this.isInitialized = false;
   }
 }

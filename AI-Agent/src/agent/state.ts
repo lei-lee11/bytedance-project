@@ -15,9 +15,6 @@ export const StateAnnotation = Annotation.Root({
   // 相关代码上下文
   codeContext: Annotation<string>(),
 
-  // 编程语言
-  programmingLanguage: Annotation<string>(),
-
   // 重试次数
   retryCount: Annotation<number>({
     reducer: (prev, next) => prev + next,

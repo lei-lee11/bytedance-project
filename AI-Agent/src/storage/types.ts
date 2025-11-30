@@ -1,14 +1,27 @@
 import { BaseMessage } from "@langchain/core/messages";
 
-// 会话状态定义
-export interface SessionState {
+// 项目/用户画像类型，用于描述项目内使用的语言和测试命令提示
+export interface ProjectProfile {
+  detectedLanguages: string[];
+  primaryLanguage: "TypeScript" | "JavaScript" | "Python" | "Other";
+  testCommand?: string;
+  testFrameworkHint?: string;
+}
+
+// 完整的 Agent 状态（与 agent/state.ts 中的 AgentState 保持一致）
+export interface AgentState {
   messages: BaseMessage[];
   summary?: string;
   currentTask?: string;
   codeContext?: string;
-  programmingLanguage?: string;
-  retryCount?: number;
-  reviewResult?: any;
+  retryCount: number;
+  reviewResult?: string;
+  projectRoot?: string;
+  projectTreeMessageId?: string;
+  projectTreeInjected: boolean;
+  projectTreeText?: string;
+  testPlanText?: string;
+  projectProfile?: ProjectProfile;
 }
 
 // 会话元数据
@@ -19,19 +32,19 @@ export interface SessionMetadata {
   updated_at: number;
   message_count: number;
   last_checkpoint?: string;
-  status: 'active' | 'archived' | 'completed';
+  status: 'active' | 'archived';
   programming_language?: string;
   summary?: string;
 }
 
-// 检查点记录
+// 检查点记录（仅支持 AgentState）
 export interface CheckpointRecord {
   timestamp: number;
   thread_id: string;
   checkpoint: {
     id: string;
     step: number;
-    channel_values: SessionState;
+    channel_values: AgentState;
   };
 }
 
@@ -84,7 +97,6 @@ export interface StorageConfig {
   basePath: string;
   maxHistoryRecords?: number;
   maxCheckpoints?: number;
-  autoBackup?: boolean;
 }
 
 // 文件路径结构
@@ -99,7 +111,7 @@ export interface SessionPaths {
 export interface SaveOptions {
   updateTimestamp?: boolean;
   incrementMessageCount?: boolean;
-  updateStatus?: 'active' | 'archived' | 'completed';
+  updateStatus?: 'active' | 'archived';
 }
 
 // 查询选项
@@ -117,4 +129,57 @@ export interface SessionListResult {
   sessions: SessionInfo[];
   total: number;
   hasMore: boolean;
+}
+
+// 会话管理器接口 - 抽象 SessionManager 和 SessionManagerWithLock 的公共接口
+export interface ISessionManager {
+  initialize(): Promise<void>;
+  createSession(options?: {
+    title?: string;
+    programmingLanguage?: string;
+    initialMessage?: string;
+  }): Promise<{ threadId: string; metadata: SessionMetadata }>;
+  getSessionInfo(threadId: string): Promise<SessionInfo | null>;
+  updateSessionMetadata(
+    threadId: string,
+    updates: Partial<SessionMetadata>,
+    options?: SaveOptions
+  ): Promise<SessionMetadata>;
+  saveCheckpoint(
+    threadId: string,
+    state: AgentState,
+    checkpointId?: string
+  ): Promise<string>;
+  getLatestCheckpoint(threadId: string): Promise<CheckpointRecord | null>;
+  getCheckpoint(threadId: string, checkpointId: string): Promise<CheckpointRecord | null>;
+  addHistoryRecord(
+    threadId: string,
+    event: Omit<HistoryRecord, 'timestamp'>
+  ): Promise<void>;
+  getHistory(threadId: string, options?: QueryOptions): Promise<HistoryRecord[]>;
+  listSessions(options?: {
+    status?: 'active' | 'archived';
+    limit?: number;
+    offset?: number;
+  }): Promise<SessionListResult>;
+  deleteSession(threadId: string): Promise<void>;
+  archiveSession(threadId: string): Promise<void>;
+  restoreSession(threadId: string): Promise<void>;
+  getSessionStats(threadId: string): Promise<any>;
+  generateSessionTitle(threadId: string): Promise<string>;
+  createHistoryFromMessage(
+    message: BaseMessage,
+    eventType: 'user_message' | 'ai_response'
+  ): Omit<HistoryRecord, 'timestamp'>;
+  createToolCallHistory(
+    toolName: string,
+    args: Record<string, any>,
+    result?: any,
+    error?: string
+  ): Omit<HistoryRecord, 'timestamp'>;
+  createSummarizeHistory(
+    oldCount: number,
+    newCount: number,
+    summary: string
+  ): Omit<HistoryRecord, 'timestamp'>;
 }

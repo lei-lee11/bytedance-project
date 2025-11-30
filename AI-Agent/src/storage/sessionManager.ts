@@ -9,7 +9,8 @@ import {
     StorageConfig,
     SaveOptions,
     QueryOptions,
-    SessionState
+    AgentState,
+    ISessionManager
 } from './types.js';
 import { BaseMessage } from '@langchain/core/messages';
 import { join } from 'path'; // 需要导入 path 模块
@@ -18,7 +19,7 @@ import { join } from 'path'; // 需要导入 path 模块
  * 会话管理器
  * 负责管理所有会话的生命周期
  */
-export class SessionManager {
+export class SessionManager implements ISessionManager {
     private fileManager: FileManager;
     private config: StorageConfig;
 
@@ -28,7 +29,6 @@ export class SessionManager {
             basePath: process.env.AI_AGENT_STORAGE_PATH || join(process.cwd(), 'ai-agent-storage'),
             maxHistoryRecords: 1000,
             maxCheckpoints: 50,
-            autoBackup: true,
             ...config
         };
 
@@ -126,15 +126,15 @@ export class SessionManager {
     }
 
     /**
-     * 保存检查点
+     * 保存检查点（支持完整的 AgentState）
      */
     async saveCheckpoint(
         threadId: string,
-        state: SessionState,
+        state: AgentState,
         checkpointId?: string
     ): Promise<string> {
         const now = Date.now();
-        const cpId = checkpointId || `ckpt_${String(now).slice(-6)}`;
+        const cpId = checkpointId || `agent_ckpt_${String(now).slice(-6)}`;
 
         // 获取当前检查点数量
         const existingCheckpoints = await this.fileManager.readCheckpoints(threadId);
@@ -254,7 +254,7 @@ export class SessionManager {
      * 列出所有会话
      */
     async listSessions(options: {
-        status?: 'active' | 'archived' | 'completed';
+        status?: 'active' | 'archived';
         limit?: number;
         offset?: number;
     } = {}): Promise<SessionListResult> {
