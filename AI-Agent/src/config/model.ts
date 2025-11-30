@@ -10,7 +10,7 @@ export const baseModel = new ChatDeepSeek({
   //streaming: false,
   maxRetries: 3,
   timeout: 30000,
-  apiKey: " fc223d35-9d61-483a-9d5b-7d319d2b7494",
+  apiKey: " 61aef3ae-9f04-4ba7-9bd8-e7923d8807c9",
   configuration: {
     baseURL: "https://ark.cn-beijing.volces.com/api/v3",
   },
