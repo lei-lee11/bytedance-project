@@ -18,7 +18,10 @@ async function detectProjectLanguage(cwd: string): Promise<string[]> {
     // 检查配置文件来推断语言
     const configFiles: Record<string, string> = {
       'package.json': 'javascript',
+      'tsconfig.json': 'typescript',
       'requirements.txt': 'python',
+      'pyproject.toml': 'python',
+      'Pipfile': 'python',
       'setup.py': 'python',
       'pom.xml': 'java',
       'build.gradle': 'java',
@@ -42,7 +45,11 @@ async function detectProjectLanguage(cwd: string): Promise<string[]> {
     // 如果没有检测到配置文件，检查源代码文件
     if (detectedLanguages.size === 0) {
       for (const file of files) {
-        const ext = file.substring(file.lastIndexOf('.'));
+        const ext = file.includes('.') ? file.substring(file.lastIndexOf('.')) : '';
+        if (ext === '.ts' || ext === '.tsx') {
+          detectedLanguages.add('typescript');
+          continue;
+        }
         const lang = detectLanguageFromExtension(ext);
         if (lang) {
           detectedLanguages.add(lang);
@@ -55,6 +62,8 @@ async function detectProjectLanguage(cwd: string): Promise<string[]> {
   
   return Array.from(detectedLanguages);
 }
+
+export { detectProjectLanguage };
 
 // 检测可用的测试命令
 async function findAvailableTestCommand(
@@ -94,6 +103,8 @@ async function findAvailableTestCommand(
   
   return null;
 }
+
+export { findAvailableTestCommand };
   
 // 工具1：自动检测语言并运行测试
  const autoTestRunnerTool = new DynamicStructuredTool({
@@ -103,7 +114,7 @@ async function findAvailableTestCommand(
     workingDirectory: z.string().optional().describe("工作目录，默认为当前目录"),
     timeout: z.number().optional().default(60000).describe("超时时间（毫秒），默认60秒"),
   }),
-  func: async ({ workingDirectory, timeout = 60000 }) => {
+  func: async ({ workingDirectory, timeout = 60000 }: { workingDirectory?: string; timeout?: number }) => {
     const cwd = workingDirectory || process.cwd();
     
     try {
@@ -170,7 +181,7 @@ async function findAvailableTestCommand(
     workingDirectory: z.string().optional().describe("工作目录"),
     timeout: z.number().optional().default(60000).describe("超时时间（毫秒）"),
   }),
-  func: async ({ command, language, workingDirectory, timeout = 60000 }) => {
+  func: async ({ command, language, workingDirectory, timeout = 60000 }: { command: string; language?: string; workingDirectory?: string; timeout?: number }) => {
     const cwd = workingDirectory || process.cwd();
     
     // 安全检查：防止危险命令
