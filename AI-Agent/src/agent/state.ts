@@ -45,6 +45,22 @@ export const StateAnnotation = Annotation.Root({
 
   // 新增：最近一次生成的测试计划文本
   testPlanText: Annotation<string>(),
+
+  // 项目/用户画像：用于存储自动检测出的语言、首选测试命令等信息
+  projectProfile: Annotation<ProjectProfile | undefined>({
+    value: (_prev: ProjectProfile | undefined, next: ProjectProfile | undefined) => next,
+    default: () => undefined,
+  }),
 });
 
 export type AgentState = typeof StateAnnotation.State;
+
+// 项目/用户画像类型，用于描述项目内使用的语言和测试命令提示
+export type ProjectProfile = {
+  detectedLanguages: string[];
+  primaryLanguage: "TypeScript" | "JavaScript" | "Python" | "Other";
+  testCommand?: string;
+  testFrameworkHint?: string;
+};
+
+// projectProfile 类型已定义并作为 Annotation 包含在 StateAnnotation 内
