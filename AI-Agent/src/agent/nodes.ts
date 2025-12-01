@@ -251,40 +251,83 @@ export const reviewCode = async (state: AgentState) => {
 };
 
 export const toolNode = new ToolNode(tools);
+
 export const agent = async (state: AgentState) => {
-  const { messages } = state;
-  const { summary, projectProfile, testPlanText } = state;
-  
-  // 构建更丰富的上下文消息
-  const contextMessages = [];
-  
-  // 添加摘要（如果有）
+  const {
+    messages,
+    summary,
+    projectProfile,
+    testPlanText,
+    todos = [],
+    currentTodoIndex = 0,
+    currentTask,
+  } = state;
+
+  const contextMessages: SystemMessage[] = [];
+
+  // 1. 当前要做的 Todo / 任务
+  const todoFromList = todos[currentTodoIndex];
+  const effectiveTask = todoFromList || currentTask; // 优先用 todo 列表里的
+
+  if (effectiveTask) {
+    contextMessages.push(
+      new SystemMessage({
+        content:
+          `你正在帮用户完成一个编程小项目。\n` +
+          `当前只需要专注完成下面这一条任务（不要跳到后面的任务）：\n` +
+          `「${effectiveTask}」\n\n` +
+          `如果需要，可以调用可用的工具来完成这个任务。`,
+      }),
+    );
+  }
+
+  // 2. 添加摘要（如果有）
   if (summary) {
-    contextMessages.push(new SystemMessage({
-      content: `对话摘要: ${summary}\n\n请基于此摘要和最新消息生成响应。`
-    }));
+    contextMessages.push(
+      new SystemMessage({
+        content:
+          `对话摘要：\n${summary}\n\n` +
+          `请基于此摘要和最新消息生成响应。`,
+      }),
+    );
   }
-  
-  // 添加项目信息（如果有）
+
+  // 3. 添加项目信息（如果有）
   if (projectProfile) {
-    contextMessages.push(new SystemMessage({
-      content: `项目信息:\n- 主要语言: ${projectProfile.primaryLanguage}\n- 测试框架: ${projectProfile.testFrameworkHint || '未知'}\n请生成符合项目风格的代码和文件操作。`
-    }));
+    contextMessages.push(
+      new SystemMessage({
+        content:
+          `项目信息：\n` +
+          `- 主要语言: ${projectProfile.primaryLanguage}\n` +
+          `- 测试框架: ${projectProfile.testFrameworkHint || "未知"}\n\n` +
+          `请生成符合项目风格的代码和文件操作，尽量沿用既有风格。`,
+      }),
+    );
   }
-  
-  // 添加测试计划（如果有）
+
+  // 4. 添加测试计划（如果有）
   if (testPlanText) {
-    contextMessages.push(new SystemMessage({
-      content: `当前测试计划摘要: ${testPlanText}\n请确保生成的代码和文件操作符合此测试计划。`
-    }));
+    contextMessages.push(
+      new SystemMessage({
+        content:
+          `当前测试计划摘要：\n${testPlanText}\n\n` +
+          `请确保生成的代码和文件操作有利于通过这些测试。`,
+      }),
+    );
   }
-  
-  // 合并消息并调用模型
+
+  // 5. 合并消息并调用模型
   const fullMessages = [...contextMessages, ...messages];
   const response = await modelWithTools.invoke(fullMessages);
-  
-  return { messages: [...messages, response] };
+
+  // 这里不在 agent 里自增 currentTodoIndex，循环由 graph 的路由控制
+  // 只记录一下当前任务，方便下游节点使用
+  return {
+    messages: [...messages, response],
+    currentTask: effectiveTask,
+  };
 };
+
 // 优化后的humanReviewNode实现
 export const humanReviewNode = async (state: AgentState) => {
   const messages = state.messages;
@@ -316,4 +359,34 @@ export const humanReviewNode = async (state: AgentState) => {
   // 可以添加对状态的修改逻辑，例如记录审批时间等
   return {};
 };
+
+
+function parseTodos(text: string): string[] {
+  return text
+    .split("\n")
+    .map((l) => l.replace(/^\s*[-•\d.]+\s*/, "").trim())
+    .filter(Boolean);
+}
+
+export async function plannerNode(state: AgentState): Promise<Partial<AgentState>> {
+  const lastUser = state.messages[state.messages.length - 1];
+
+  const system = new SystemMessage(
+    "你是一个项目规划助手，请把用户的整体需求拆分成可执行的开发 ToDo 列表。"
+  );
+  const user = new HumanMessage(
+    `根据下面的需求，输出一个有序的待办列表，每行一个事项：\n\n${lastUser?.content ?? ""}`
+  );
+
+  const res = await baseModel.invoke([system, user]);
+
+  const todos = parseTodos((res as AIMessage).content as string);
+
+  return {
+    // 把规划结果也写进 messages 里，方便之后 agent 参考
+    messages: [...state.messages, res],
+    todos,
+    currentTodoIndex: 0,
+  };
+}
 

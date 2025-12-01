@@ -1,29 +1,29 @@
 import { StateGraph, START, END } from "@langchain/langgraph";
-import { AIMessage } from "@langchain/core/messages";
+import { isAIMessage } from "@langchain/core/messages";
 import { StateAnnotation, AgentState } from "./state.ts";
 import { MemorySaver } from "@langchain/langgraph";
-//import { checkpointer } from "../config/checkpointer.js";
 import { SENSITIVE_TOOLS } from "../utils/tools/index.ts";
 import {
   summarizeConversation,
   toolNode,
   agent,
   humanReviewNode,
+  plannerNode,   // ✅ 先规划 todolist 的节点
 } from "./nodes.ts";
 
 const checkpointer = new MemorySaver();
+
 // 创建图实例
 async function routeAgentOutput(state: AgentState) {
   const messages = state.messages;
   const lastMessage = messages[messages.length - 1];
 
-  // 1. 检查是否有工具调用
+  // 1. 优先检查是否有工具调用
   if (
     lastMessage &&
-    AIMessage.isInstance(lastMessage) &&
+    isAIMessage(lastMessage) &&
     lastMessage.tool_calls?.length
   ) {
-    // 检查敏感性
     const hasSensitiveTool = lastMessage.tool_calls.some((tool) =>
       SENSITIVE_TOOLS.includes(tool.name),
     );
@@ -35,30 +35,58 @@ async function routeAgentOutput(state: AgentState) {
     return "toolNode"; // 安全工具，直接执行
   }
 
-  // 2. 检查是否需要总结 (保留你之前的逻辑)
-  if (messages.length > 6) {
+  // 2. 没有工具调用，检查 todo 是否已经全部完成
+  const todos = state.todos ?? [];
+  const currentTodoIndex = state.currentTodoIndex ?? 0;
+
+  const hasTodos = todos.length > 0;
+  const allTodosDone = hasTodos && currentTodoIndex >= todos.length;
+
+  if (allTodosDone) {
+    // 所有 todo 都做完了，整个项目结束
+    return END;
+  }
+
+  // 3. 如果还有 todo 没做完，就继续让 agent 处理下一轮
+  if (hasTodos && currentTodoIndex < todos.length) {
+    // 这里不单独搞 advanceTodo 节点，
+    // 而是让 agent 自己根据 currentTodoIndex 更新 / 继续执行
+    return "continue";
+  }
+
+  // 4. 不走 todo 流程时（比如没定义 todos），按老逻辑看是否需要总结
+  if (messages.length > 30) {
     return "summarize";
   }
 
-  // 3. 结束
+  // 5. 默认结束
   return END;
 }
+
 const workflow = new StateGraph(StateAnnotation)
+  .addNode("planner", plannerNode)                // ✅ 先规划，生成 todolist 等
   .addNode("summarize", summarizeConversation)
   .addNode("agent", agent)
-  .addNode("toolNode", toolNode) // 使用与导出变量相同的节点名称
+  .addNode("toolNode", toolNode)
   .addNode("human_review", humanReviewNode)
-  .addEdge(START, "agent")
+  // 入口：先跑 planner，一次性写好 todos / 项目信息等
+  .addEdge(START, "planner")
+  .addEdge("planner", "agent")
+  // agent 输出后，根据路由决定下一步
   .addConditionalEdges("agent", routeAgentOutput, {
-    toolNode: "toolNode", // 安全工具 -> 直接执行
-    human_review: "human_review", // 敏感工具 -> 去审批
+    toolNode: "toolNode",        // 安全工具 -> 直接执行
+    human_review: "human_review", // 节点名保持一致
     summarize: "summarize",
+    continue: "agent",           // ✅ 不用 advanceTodo，直接回 agent 继续下一轮
     [END]: END,
   })
-  .addEdge("human_review", "toolNode") // 更新边连接
-  .addEdge("toolNode", "agent") // 更新边连接
-  .addEdge("summarize", END);
+  // 敏感工具 -> 人工审批 -> 工具 -> agent
+  .addEdge("human_review", "toolNode")
+  .addEdge("toolNode", "agent")
+  // 总结只是压缩上下文，不结束，继续 agent
+  .addEdge("summarize", "agent");
+
 export const graph = workflow.compile({
-  checkpointer: checkpointer,
+  checkpointer,
   interruptBefore: ["human_review"],
 });

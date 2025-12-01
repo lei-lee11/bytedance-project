@@ -7,6 +7,8 @@ export const StateAnnotation = Annotation.Root({
     default: () => [],
   }),
 
+
+
   summary: Annotation<string>(),
 
   // 当前要执行的任务
@@ -51,6 +53,18 @@ export const StateAnnotation = Annotation.Root({
     value: (_prev: ProjectProfile | undefined, next: ProjectProfile | undefined) => next,
     default: () => undefined,
   }),
+
+  todos: Annotation<string[]>({
+    // 如果没设置过，默认是空数组
+    value: (_prev, next) => next,
+    default: () => [],
+  }),
+
+  currentTodoIndex: Annotation<number>({
+    value: (_prev, next) => next, // 覆盖式更新
+    default: () => 0,
+  }),
+
 });
 
 export type AgentState = typeof StateAnnotation.State;
