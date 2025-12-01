@@ -7,6 +7,7 @@ import {
   SystemMessage,
   RemoveMessage,
   HumanMessage,
+  AIMessage,
 } from "@langchain/core/messages";
 import {
   buildParseUserInputPrompt,
@@ -34,7 +35,7 @@ function extractTestPlan(text: unknown): string | undefined {
   if (idx === -1) return undefined;
   return text.slice(idx);
 }
-import { tools } from "../utils/tools/index.ts";
+import { tools, SENSITIVE_TOOLS } from "../utils/tools/index.ts";
 import { randomUUID } from "crypto";
 const MAX_RETRIES = 5;
 import { project_tree } from "../utils/tools/project_tree.ts";
@@ -251,22 +252,68 @@ export const reviewCode = async (state: AgentState) => {
 
 export const toolNode = new ToolNode(tools);
 export const agent = async (state: AgentState) => {
-  let { messages } = state;
-  const { summary } = state;
+  const { messages } = state;
+  const { summary, projectProfile, testPlanText } = state;
+  
+  // 构建更丰富的上下文消息
+  const contextMessages = [];
+  
+  // 添加摘要（如果有）
   if (summary) {
-    const systemMessage = new SystemMessage({
-      content: `Summary of conversation earlier: ${summary}`,
-    });
-    messages = [systemMessage, ...messages];
+    contextMessages.push(new SystemMessage({
+      content: `对话摘要: ${summary}\n\n请基于此摘要和最新消息生成响应。`
+    }));
   }
-  const response = await modelWithTools.invoke(messages);
+  
+  // 添加项目信息（如果有）
+  if (projectProfile) {
+    contextMessages.push(new SystemMessage({
+      content: `项目信息:\n- 主要语言: ${projectProfile.primaryLanguage}\n- 测试框架: ${projectProfile.testFrameworkHint || '未知'}\n请生成符合项目风格的代码和文件操作。`
+    }));
+  }
+  
+  // 添加测试计划（如果有）
+  if (testPlanText) {
+    contextMessages.push(new SystemMessage({
+      content: `当前测试计划摘要: ${testPlanText}\n请确保生成的代码和文件操作符合此测试计划。`
+    }));
+  }
+  
+  // 合并消息并调用模型
+  const fullMessages = [...contextMessages, ...messages];
+  const response = await modelWithTools.invoke(fullMessages);
+  
   return { messages: [...messages, response] };
 };
-export const humanReviewNode = async (_state: AgentState) => {
-  // 这里可以处理人工的输入。
-  // 比如：如果人工在这个阶段修改了 State（例如取消了 tool_calls），可以在这里处理。
-  // 简单起见，这里只是一个传递节点。
-  console.log("--- 人工已审批，继续执行 ---");
+// 优化后的humanReviewNode实现
+export const humanReviewNode = async (state: AgentState) => {
+  const messages = state.messages;
+  const lastMessage = messages[messages.length - 1];
+  
+  // 分析待审批的工具调用
+  if (lastMessage && AIMessage.isInstance(lastMessage) && lastMessage.tool_calls?.length) {
+    const sensitiveCalls = lastMessage.tool_calls.filter(tool => 
+      SENSITIVE_TOOLS.includes(tool.name)
+    );
+    
+    console.log("=== 人工审批请求 ===");
+    console.log(`待审批工具调用: ${sensitiveCalls.length} 个`);
+    
+    // 详细显示每个敏感工具调用的信息
+    sensitiveCalls.forEach((call, index) => {
+      console.log(`\n工具 ${index + 1}: ${call.name}`);
+      console.log(`参数: ${JSON.stringify(call.args, null, 2)}`);
+      
+      // 为文件操作提供额外说明
+      if (call.name.includes('file') || call.name.includes('code')) {
+        console.log("这是一个文件操作，可能会修改项目文件结构。");
+      }
+    });
+    
+    console.log("\n=== 审批完成，继续执行 ===\n");
+  }
+  
+  // 可以添加对状态的修改逻辑，例如记录审批时间等
   return {};
 };
 
