@@ -373,32 +373,110 @@ export const humanReviewNode = async (state: AgentState) => {
 };
 
 
-function parseTodos(text: string): string[] {
-  return text
-    .split("\n")
-    .map((l) => l.replace(/^\s*[-•\d.]+\s*/, "").trim())
-    .filter(Boolean);
+function parseTodosFromPlan(planText: string): string[] {
+  const lines = planText.split("\n");
+
+  const todosSectionStart = lines.findIndex((line) =>
+    line.trim().startsWith("## 开发 ToDo 列表"),
+  );
+
+  if (todosSectionStart === -1) {
+    // 没有找到标题，就退回到简单暴力版：解析所有行
+    return lines
+      .map((l) => l.replace(/^\s*[-•\d.\[\]\s]+/, "").trim())
+      .filter(Boolean);
+  }
+
+  const todoLines: string[] = [];
+  for (let i = todosSectionStart + 1; i < lines.length; i++) {
+    const line = lines[i];
+
+    // 碰到下一个二级标题，说明 ToDo 部分结束
+    if (line.trim().startsWith("## ")) break;
+
+    // 只抽列表项
+    if (/^\s*[-•\d.]/.test(line)) {
+      const cleaned = line.replace(/^\s*[-•\d.\[\]\s]+/, "").trim();
+      if (cleaned) {
+        todoLines.push(cleaned);
+      }
+    }
+  }
+
+  return todoLines;
 }
 
 export async function plannerNode(state: AgentState): Promise<Partial<AgentState>> {
   const lastUser = state.messages[state.messages.length - 1];
 
+  // 如果你在 StateAnnotation 里给 projectRoot 设置了默认值，这里直接用即可
+  const projectRoot = state.projectRoot ?? "C:\\projects\\playground";
+
   const system = new SystemMessage(
-    "你是一个项目规划助手，请把用户的整体需求拆分成可执行的开发 ToDo 列表。"
+    [
+      "你是一名资深软件架构师兼项目规划助手，负责为一个本地项目做完整的技术规划和开发任务拆解。",
+      "",
+      "你的输出会被一个只能“写代码和进行文件操作”的智能体使用，所以：",
+      "1. 你需要先做『项目规划』：",
+      "   - 根据需求选择合适的技术栈（例如 TypeScript + React + Vite，或 Node.js + Express 等），并简要说明选择理由。",
+      "   - 规划项目目录结构（使用相对于项目根目录的路径，例如 src/, tests/, src/pages/Home.tsx 等）。",
+      "   - 说明关键模块/文件的作用。",
+      "",
+      "2. 然后做『开发 ToDo 拆解』：",
+      "   - 每一条 ToDo 必须是可以通过“编写/修改代码 + 文件操作”完成的具体任务。",
+      "   - 每条 ToDo 要尽量指明涉及的文件或目录（相对路径）。",
+      "   - 禁止出现以下类型的任务：",
+      "     - 原型设计、UI/交互/视觉设计、线框图绘制。",
+      "     - 与用户/产品沟通、需求确认、会议、评审。",
+      "     - 抽象的目标，如“提升用户体验”、“优化交互逻辑”这类无法直接编码执行的任务。",
+      "   - 任务粒度建议为：一个 ToDo 大致能在 1~3 次 agent 调用内完成。",
+      "   - 示例（✅ 可以）：",
+      "     - `在 src/pages/PostDetail.tsx 中实现文章详情页组件，包含标题、日期、正文占位。`",
+      "     - `在 src/api/posts.ts 中实现 getPostById(id: string) 函数，从本地 JSON 读取文章详情。`",
+      "   - 反例（❌ 禁止）：",
+      "     - `完成文章详情页原型设计。`",
+      "     - `和产品确认文章推荐模块的交互细节。`",
+      "",
+      "3. 输出格式必须严格遵守：",
+      "   - 第一部分标题：`## 项目规划`",
+      "     - 描述技术栈选择、项目结构、关键模块。",
+      "   - 第二部分标题：`## 开发 ToDo 列表`",
+      "     - 使用 Markdown 列表形式列出 ToDo（可以用 `-` 或 `1.` 开头）。",
+      "   - 不要输出其他顶级标题。",
+      "",
+      "你的回答将被直接解析并驱动后续自动开发流程，请确保结构清晰、任务可执行。",
+    ].join("\n"),
   );
+
   const user = new HumanMessage(
-    `根据下面的需求，输出一个有序的待办列表，每行一个事项：\n\n${lastUser?.content ?? ""}`
+    [
+      `项目根目录（由系统给定，仅供参考，不需要修改）：\`${projectRoot}\``,
+      "",
+      "下面是用户的需求，请基于此进行项目规划和任务拆解：",
+      "",
+      "--------------------------------",
+      lastUser?.content ?? "",
+      "--------------------------------",
+    ].join("\n"),
   );
 
   const res = await baseModel.invoke([system, user]);
 
-  const todos = parseTodos((res as AIMessage).content as string);
+  const fullPlanText = (res as AIMessage).content as string;
+  const todos = parseTodosFromPlan(fullPlanText);
 
   return {
-    // 把规划结果也写进 messages 里，方便之后 agent 参考
+    // 1. 保存规划结果，方便 agent 作为上下文参考
     messages: [...state.messages, res],
+
+    // 2. 保存完整项目规划文本（技术栈 + 结构 + todo）
+    codeContext: fullPlanText,
+
+    // 3. 初始化 ToDo 列表
     todos,
     currentTodoIndex: 0,
+
+    // 4. 可以顺便设置一个笼统的当前任务描述
+    currentTask: "根据项目规划逐条完成开发 ToDo 列表中的任务",
   };
 }
-
