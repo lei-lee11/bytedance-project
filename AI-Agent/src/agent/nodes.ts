@@ -36,6 +36,7 @@ function extractTestPlan(text: unknown): string | undefined {
   return text.slice(idx);
 }
 import { tools, SENSITIVE_TOOLS } from "../utils/tools/index.ts";
+import path from "path";
 import { randomUUID } from "crypto";
 const MAX_RETRIES = 5;
 import { project_tree } from "../utils/tools/project_tree.ts";
@@ -252,6 +253,96 @@ export const reviewCode = async (state: AgentState) => {
 
 export const toolNode = new ToolNode(tools);
 
+// 自定义工具执行器：直接执行模型请求的 tool_calls，并把结果或错误作为消息写回 state
+export const toolExecutor = async (state: AgentState) => {
+  const messages = state.messages || [];
+  const lastMessage = messages[messages.length - 1];
+  const outMsgs: SystemMessage[] = [];
+
+  if (!lastMessage || !AIMessage.isInstance(lastMessage)) {
+    return {};
+  }
+
+  const toolCalls = ((lastMessage as unknown) as { tool_calls?: unknown }).tool_calls as Array<any> | undefined || [];
+  if (!toolCalls.length) return {};
+
+  for (const call of toolCalls) {
+    const name = call.name;
+    const args = call.args || {};
+
+    // 遍历 args，检测可能的路径参数并强制为绝对路径或报错
+    const strict = process.env.STRICT_ABSOLUTE_PATHS === "true";
+    const projectRootBase = (state.projectRoot && path.resolve(state.projectRoot)) || process.cwd();
+
+      const isPathKey = (k: string) => /\b(?:path|file|dir|directory|workingDir|workingDirectory|file_path|filePath|target)\b/i.test(k);
+
+    for (const key of Object.keys(args)) {
+      if (!isPathKey(key)) continue;
+      const raw = args[key];
+      if (typeof raw !== "string" || raw.trim() === "") continue;
+      // 如果已经是绝对路径，校验是否越界
+      if (path.isAbsolute(raw)) {
+        const resolved = path.resolve(raw);
+        const rp = projectRootBase.toLowerCase();
+        const rp2 = resolved.toLowerCase();
+        if (!rp2.startsWith(rp)) {
+          // 路径逃出 projectRoot
+          outMsgs.push(
+            new SystemMessage({ content: `路径参数拒绝：${key} -> ${raw}（不得超出 projectRoot: ${projectRootBase}）` }),
+          );
+          // 跳过本次工具调用
+          continue;
+        }
+        // 合法，继续
+        args[key] = resolved;
+        continue;
+      }
+
+      // 非绝对路径
+      if (strict) {
+        outMsgs.push(
+          new SystemMessage({ content: `路径参数必须为绝对路径：${key} -> ${raw}. 请提供以盘符或 '/' 开头的绝对路径。` }),
+        );
+        continue;
+      }
+
+      // 非严格模式：把相对路径解析到 projectRoot 下，并阻止越界
+      const resolved = path.resolve(projectRootBase, raw);
+      const rp = projectRootBase.toLowerCase();
+      const rp2 = resolved.toLowerCase();
+      if (!rp2.startsWith(rp)) {
+        outMsgs.push(
+          new SystemMessage({ content: `解析后的路径超出 projectRoot：${key} -> ${resolved}（原始：${raw}）。已拒绝。` }),
+        );
+        continue;
+      }
+      args[key] = resolved;
+    }
+
+    // 查找对应工具实例
+    const tool = (tools as Array<unknown>).find((t: any) => (t && (t.name === name || (t.metadata && t.metadata.name === name))));
+    if (!tool) {
+      outMsgs.push(new SystemMessage({ content: `工具未找到: ${name}` }));
+      continue;
+    }
+
+    try {
+      // 调用工具：把 state.projectRoot 放入 config.configurable 里，便于工具获取
+      const config = { configurable: { projectRoot: state.projectRoot } } as unknown as Record<string, unknown>;
+      const result = await (tool as any).func?.(args, config);
+      outMsgs.push(new SystemMessage({ content: `工具 ${name} 执行成功：\n${String(result)}` }));
+    } catch (err) {
+      const errMsg = typeof err === "string" ? err : (err as Error)?.message || String(err);
+      outMsgs.push(new SystemMessage({ content: `工具 ${name} 执行失败：\n${errMsg}` }));
+    }
+  }
+
+  if (outMsgs.length === 0) return {};
+  return {
+    messages: [...messages, ...outMsgs],
+  };
+};
+
 export const agent = async (state: AgentState) => {
   const {
     messages,
@@ -318,14 +409,34 @@ export const agent = async (state: AgentState) => {
 
   // 5. 合并消息并调用模型
   const fullMessages = [...contextMessages, ...messages];
-  const response = await modelWithTools.invoke(fullMessages);
-
-  // 这里不在 agent 里自增 currentTodoIndex，循环由 graph 的路由控制
-  // 只记录一下当前任务，方便下游节点使用
-  return {
-    messages: [...messages, response],
-    currentTask: effectiveTask,
-  };
+  // 如果 state 指定了 projectRoot，临时切换进程工作目录
+  const originalCwd = process.cwd();
+  try {
+    if (state.projectRoot) {
+      try {
+        process.chdir(state.projectRoot);
+      } catch (err) {
+        console.warn(`无法切换到 projectRoot: ${state.projectRoot} - ${err}`);
+      }
+    }
+    const response = await modelWithTools.invoke(fullMessages);
+    // 恢复 cwd
+    try {
+      process.chdir(originalCwd);
+    } catch (err) {
+      console.warn('Failed to restore cwd:', err);
+    }
+    return {
+      messages: [...messages, response],
+      currentTask: effectiveTask,
+    };
+  } finally {
+    try {
+      process.chdir(originalCwd);
+    } catch (err) {
+      console.warn('Failed to restore cwd:', err);
+    }
+  }
 };
 
 // 节点：推进当前 todo 索引（在工具执行后调用）
@@ -373,86 +484,83 @@ export const humanReviewNode = async (state: AgentState) => {
 };
 
 
-function parseTodosFromPlan(planText: string): string[] {
+function parseTodos(planText: string): string[] {
   const lines = planText.split("\n");
 
-  const todosSectionStart = lines.findIndex((line) =>
+  const start = lines.findIndex((line) =>
     line.trim().startsWith("## 开发 ToDo 列表"),
   );
+  if (start === -1) return [];
 
-  if (todosSectionStart === -1) {
-    // 没有找到标题，就退回到简单暴力版：解析所有行
-    return lines
-      .map((l) => l.replace(/^\s*[-•\d.\[\]\s]+/, "").trim())
-      .filter(Boolean);
-  }
-
-  const todoLines: string[] = [];
-  for (let i = todosSectionStart + 1; i < lines.length; i++) {
+  const todos: string[] = [];
+  for (let i = start + 1; i < lines.length; i++) {
     const line = lines[i];
+    const trimmed = line.trim();
 
-    // 碰到下一个二级标题，说明 ToDo 部分结束
-    if (line.trim().startsWith("## ")) break;
+    // 碰到下一个标题就结束
+    if (trimmed.startsWith("## ")) break;
 
-    // 只抽列表项
-    if (/^\s*[-•\d.]/.test(line)) {
-      const cleaned = line.replace(/^\s*[-•\d.\[\]\s]+/, "").trim();
-      if (cleaned) {
-        todoLines.push(cleaned);
-      }
+    // 只收列表项
+    if (/^[-•\d.]/.test(trimmed)) {
+      const cleaned = trimmed.replace(/^[-•\d.\s]+/, "").trim();
+      if (cleaned) todos.push(cleaned);
     }
   }
 
-  return todoLines;
+  return todos;
 }
 
 export async function plannerNode(state: AgentState): Promise<Partial<AgentState>> {
   const lastUser = state.messages[state.messages.length - 1];
-
-  // 如果你在 StateAnnotation 里给 projectRoot 设置了默认值，这里直接用即可
   const projectRoot = state.projectRoot ?? "C:\\projects\\playground";
 
   const system = new SystemMessage(
     [
-      "你是一名资深软件架构师兼项目规划助手，负责为一个本地项目做完整的技术规划和开发任务拆解。",
+      "你是一个给“代码智能体”做项目规划的助手。",
+      "规划结果会直接驱动自动写代码/改文件的过程，所以你只能输出对编码有直接帮助的内容。",
       "",
-      "你的输出会被一个只能“写代码和进行文件操作”的智能体使用，所以：",
-      "1. 你需要先做『项目规划』：",
-      "   - 根据需求选择合适的技术栈（例如 TypeScript + React + Vite，或 Node.js + Express 等），并简要说明选择理由。",
-      "   - 规划项目目录结构（使用相对于项目根目录的路径，例如 src/, tests/, src/pages/Home.tsx 等）。",
-      "   - 说明关键模块/文件的作用。",
+      "【重要约束】",
+      "1. 只允许输出以下三个部分，且顺序必须一致：",
+      "   ## 技术栈与项目概要",
+      "   ## 项目目录结构",
+      "   ## 开发 ToDo 列表",
       "",
-      "2. 然后做『开发 ToDo 拆解』：",
-      "   - 每一条 ToDo 必须是可以通过“编写/修改代码 + 文件操作”完成的具体任务。",
-      "   - 每条 ToDo 要尽量指明涉及的文件或目录（相对路径）。",
-      "   - 禁止出现以下类型的任务：",
-      "     - 原型设计、UI/交互/视觉设计、线框图绘制。",
-      "     - 与用户/产品沟通、需求确认、会议、评审。",
-      "     - 抽象的目标，如“提升用户体验”、“优化交互逻辑”这类无法直接编码执行的任务。",
-      "   - 任务粒度建议为：一个 ToDo 大致能在 1~3 次 agent 调用内完成。",
-      "   - 示例（✅ 可以）：",
-      "     - `在 src/pages/PostDetail.tsx 中实现文章详情页组件，包含标题、日期、正文占位。`",
-      "     - `在 src/api/posts.ts 中实现 getPostById(id: string) 函数，从本地 JSON 读取文章详情。`",
-      "   - 反例（❌ 禁止）：",
-      "     - `完成文章详情页原型设计。`",
-      "     - `和产品确认文章推荐模块的交互细节。`",
+      "2. 各部分要求：",
+      "   - 技术栈与项目概要：",
+      "     - 选择主要技术栈（例如：React + TypeScript + Vite + Tailwind CSS）。",
+      "     - 用 2~5 句解释选择理由和整体思路。",
+      "   - 项目目录结构：",
+      "     - 用 tree 风格列出核心目录和关键文件，路径相对项目根目录（例如：src/pages/Home.tsx）。",
+      "     - 不要展开到每一个小组件，只列对整体结构重要的部分。",
+      "   - 开发 ToDo 列表：",
+      "     - 列出 8~20 条“可以通过代码和文件操作完成”的开发任务。",
+      "     - 每条 ToDo 必须尽量指明涉及的文件/目录（相对路径）。",
+      "     - 每条 ToDo 粒度大致能在 1~3 次智能体调用内完成。",
       "",
-      "3. 输出格式必须严格遵守：",
-      "   - 第一部分标题：`## 项目规划`",
-      "     - 描述技术栈选择、项目结构、关键模块。",
-      "   - 第二部分标题：`## 开发 ToDo 列表`",
-      "     - 使用 Markdown 列表形式列出 ToDo（可以用 `-` 或 `1.` 开头）。",
-      "   - 不要输出其他顶级标题。",
+      "3. 明确禁止输出：",
+      "   - ‘可能的扩展功能’、未来规划、商业计划、监控、安全、CI/CD、大量功能脑暴。",
+      "   - 任何与“持续幸福/持续增长/持续发展”等抽象愿景相关的内容。",
+      "   - 部署计划、日志分析、A/B 测试、PWA、安全加固等非本次 demo 必须内容。",
       "",
-      "你的回答将被直接解析并驱动后续自动开发流程，请确保结构清晰、任务可执行。",
+      "4. ToDo 形态示例（✅ 可以）：",
+      "   - `在 src/pages/PostList.tsx 中实现文章列表页，使用 PostCard 展示所有文章。`",
+      "   - `在 src/utils/posts.ts 中实现 getPostById(id: string) 函数，从 data/posts.json 中读取文章详情。`",
+      "   反例（❌ 禁止）：",
+      "   - `完成文章详情页原型设计。`（这是设计工作，不是具体代码实现）",
+      "   - `优化用户体验`（过于抽象，不可直接执行）。",
+      "",
+      "5. 输出要求：",
+      "   - 严格使用这三个标题和顺序，不要添加其他 `##` 标题。",
+      "   - 内容总长度控制在一个中等篇幅内，不要写长篇说明文，也不要做功能脑暴。",
+      "   - 不要输出任何工具名称、版本号、ASCII 艺术或品牌信息。",
     ].join("\n"),
   );
 
   const user = new HumanMessage(
     [
-      `项目根目录（由系统给定，仅供参考，不需要修改）：\`${projectRoot}\``,
+      `项目根目录（由系统指定，仅作为参考前提，不需要修改）：\`${projectRoot}\``,
       "",
-      "下面是用户的需求，请基于此进行项目规划和任务拆解：",
+      "下面是用户的需求，请基于此进行项目规划和 ToDo 拆解：",
       "",
       "--------------------------------",
       lastUser?.content ?? "",
@@ -461,22 +569,14 @@ export async function plannerNode(state: AgentState): Promise<Partial<AgentState
   );
 
   const res = await baseModel.invoke([system, user]);
-
   const fullPlanText = (res as AIMessage).content as string;
-  const todos = parseTodosFromPlan(fullPlanText);
+  const todos = parseTodos(fullPlanText);
 
   return {
-    // 1. 保存规划结果，方便 agent 作为上下文参考
     messages: [...state.messages, res],
-
-    // 2. 保存完整项目规划文本（技术栈 + 结构 + todo）
     codeContext: fullPlanText,
-
-    // 3. 初始化 ToDo 列表
     todos,
     currentTodoIndex: 0,
-
-    // 4. 可以顺便设置一个笼统的当前任务描述
     currentTask: "根据项目规划逐条完成开发 ToDo 列表中的任务",
   };
 }

@@ -20,11 +20,11 @@ function getProjectRoot(config?: RunnableConfig): string {
     | string
     | undefined;
 
-  if (!projectRoot) {
-    throw new Error(
-      "projectRoot is not set in config.configurable.projectRoot. " +
-        "File operations are disabled until projectRoot is provided."
-    );
+  // 强制使用默认项目根目录（用户要求）
+  if (!projectRoot || typeof projectRoot !== 'string' || projectRoot.trim() === '') {
+    const forced = 'C:\\projects\\playground';
+    console.warn(`projectRoot 未设置，强制使用默认根目录：${forced}`);
+    return path.resolve(forced);
   }
 
   return path.resolve(projectRoot);

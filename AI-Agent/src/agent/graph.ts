@@ -6,6 +6,7 @@ import { SENSITIVE_TOOLS } from "../utils/tools/index.ts";
 import {
   summarizeConversation,
   toolNode,
+  toolExecutor,
   agent,
   humanReviewNode,
   plannerNode,   // ✅ 先规划 todolist 的节点
@@ -68,6 +69,7 @@ const workflow = new StateGraph(StateAnnotation)
   .addNode("summarize", summarizeConversation)
   .addNode("agent", agent)
   .addNode("toolNode", toolNode)
+  .addNode("toolExecutor", toolExecutor)
   .addNode("human_review", humanReviewNode)
   .addNode("advance_todo", async (state) => {
     // 简单桥接：返回 partial state 来推进索引
@@ -78,7 +80,7 @@ const workflow = new StateGraph(StateAnnotation)
   .addEdge("planner", "agent")
   // agent 输出后，根据路由决定下一步
   .addConditionalEdges("agent", routeAgentOutput, {
-    toolNode: "toolNode",        // 安全工具 -> 直接执行
+    toolNode: "toolExecutor",        // 安全工具 -> 直接交给 toolExecutor 执行并记录
     human_review: "human_review", // 节点名保持一致
     summarize: "summarize",
     continue: "agent",           // ✅ 不用 advanceTodo，直接回 agent 继续下一轮
@@ -86,7 +88,8 @@ const workflow = new StateGraph(StateAnnotation)
   })
   // 敏感工具 -> 人工审批 -> 工具 -> agent
   .addEdge("human_review", "toolNode")
-  .addEdge("toolNode", "advance_todo")
+  .addEdge("toolNode", "toolExecutor")
+  .addEdge("toolExecutor", "advance_todo")
   .addEdge("advance_todo", "agent")
   // 总结只是压缩上下文，不结束，继续 agent
   .addEdge("summarize", "agent");
