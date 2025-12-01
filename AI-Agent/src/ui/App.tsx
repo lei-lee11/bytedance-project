@@ -10,8 +10,9 @@ import { MinimalThinking } from "./MinimalThinking.js";
 import { ApprovalCard } from "./ApprovalCard.js";
 import { HistoryItem } from "./HistoryItem.js";
 import { InputArea } from "./components/TextInput/InputArea.js";
-import { storage } from "./test.js";//测试用
+import { storage } from "./test.js"; //测试用
 import { useSessionManager } from "./hooks/useSessionManager.ts";
+import { StatusBar } from "./components/StatusBar.tsx";
 
 marked.setOptions({
   renderer: new TerminalRenderer({
@@ -25,7 +26,7 @@ marked.setOptions({
 type ToolState = { name: string; input: string };
 type PendingToolState = { name: string; args: any };
 
-// Markdown 组件 
+// Markdown 组件
 export const MarkdownText = ({ content }: { content: string }) => {
   const formattedText = useMemo(() => {
     try {
@@ -37,7 +38,7 @@ export const MarkdownText = ({ content }: { content: string }) => {
   return <Text>{formattedText}</Text>;
 };
 
-// 状态徽章组件 
+// 状态徽章组件
 export const StatusBadge = ({ role }: { role: string }) => {
   switch (role) {
     case "user":
@@ -55,7 +56,7 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
   const { exit } = useApp();
   const [showLogo, setShowLogo] = useState(true);
   const {
-    activeSessionId: threadId, 
+    activeSessionId: threadId,
     currentHistory: history,
     isLoading,
     sessionList,
@@ -64,7 +65,7 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
     addMessage, // 统一的消息添加入口（自动处理 UI + 持久化）
   } = useSessionManager();
 
-  // 实时状态 
+  // 实时状态
   const [currentAIContent, setCurrentAIContent] = useState("");
   const [currentReasoning, setCurrentReasoning] = useState("");
   const [currentTool, setCurrentTool] = useState<ToolState | null>(null);
@@ -141,7 +142,9 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
         if (fullContent || fullReasoning) {
           // [核心修改] 使用 Hook 添加 AI 消息
           await addMessage("ai", fullContent, fullReasoning);
-
+          setCurrentAIContent("");
+          setCurrentReasoning("");
+          setCurrentTool(null);
           // 更新会话元数据
           await storage.sessions.updateSessionMetadata(threadId, {
             status: "active",
@@ -348,54 +351,47 @@ Use /switch <id> to change session.`,
   }
 
   return (
-    <Box flexDirection="column" height="100%" padding={1}>
+    <Box flexDirection="column" height="100%">
       {showLogo && <Header />}
 
-      <Box flexDirection="column" flexGrow={1}>
-        <Box
-          marginBottom={1}
-          flexDirection="row"
-          justifyContent="space-between"
-        >
-          <Text color="green" bold>
-            Intelligent CLI Tool
-          </Text>
-          <Box>
-            <Text color="blue" dimColor>
-              {" "}
-              CMD: /new /list /switch |{" "}
-            </Text>
-            <Text color="gray">Session: {threadId.split("-").pop()}</Text>
-          </Box>
-        </Box>
-
-        {/* 渲染历史记录 (数据源来自 Hook) */}
+      {/*  聊天主区域 */}
+      <Box flexDirection="column" flexGrow={1} paddingX={1}>
+        {/* 历史记录 */}
         <Static items={history}>
           {(item) => <HistoryItem key={item.id} item={item} />}
         </Static>
 
-        {/* 实时流式输出区域  */}
+        {/* 实时流式输出区域 */}
         {(isThinking ||
           currentAIContent ||
           currentReasoning ||
           currentTool) && (
-          <Box flexDirection="row" marginBottom={1}>
+          <Box flexDirection="row" marginBottom={0} marginTop={1}>
             <Box width={2} marginRight={1}>
               <StatusBadge role="ai" />
             </Box>
             <Box flexDirection="column" flexGrow={1}>
               {(currentReasoning || currentTool) && (
-                <MinimalThinking
-                  content={currentReasoning}
-                  toolName={currentTool?.name}
-                />
+                <Box marginBottom={currentAIContent ? 1 : 0}>
+                  <MinimalThinking
+                    content={currentReasoning}
+                    toolName={currentTool?.name}
+                  />
+                </Box>
               )}
               {currentAIContent && <MarkdownText content={currentAIContent} />}
             </Box>
           </Box>
         )}
+      </Box>
 
-        <Box marginTop={1}>
+      {/*   底部固定区域 */}
+      <Box flexDirection="column" marginTop={1}>
+        {/* 状态栏/分隔线 */}
+        <StatusBar threadId={threadId} />
+
+        {/* 输入框 / 审批卡片 */}
+        <Box paddingX={1} paddingBottom={1}>
           {awaitingApproval ? (
             <ApprovalCard tool={pendingTool!} onSelect={handleApprovalSelect} />
           ) : (

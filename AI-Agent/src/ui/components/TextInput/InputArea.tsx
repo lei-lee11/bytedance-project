@@ -1,5 +1,6 @@
 import React, { FC, useState } from "react";
 import { Box, Text } from "ink";
+import { THEME } from "../../utils/theme.ts";
 // 注意引用路径：如果 InputArea 和 TextArea 在同一目录下，使用 ./TextArea.js
 // 如果你是 TypeScript 项目且使用了 tsx，运行时通常引用编译后的 .js 扩展名，或者配置了打包工具则不需要后缀
 import { TextArea } from "./TextArea.tsx";
@@ -31,24 +32,24 @@ export const InputArea: FC<InputAreaProps> = ({ onSubmit, isLoading }) => {
   }
 
   return (
-    <Box flexDirection="column" marginTop={1} >
+    <Box flexDirection="column" marginTop={1}>
       {/* 顶部：操作提示栏 (非常重要，因为操作逻辑变了) */}
       <Box marginBottom={0} paddingX={1}>
         <Text color="gray" dimColor>
-          [Enter] 换行 | [Alt + Enter] 或 [Ctrl + X] 提交
+          [Enter] 换行 | [Ctrl + X] 提交
         </Text>
       </Box>
 
       {/* 核心：输入框容器 */}
       <Box
         borderStyle="round"
-        borderColor="green"
+        borderColor={THEME.borderActive}
         paddingX={1}
         flexDirection="row"
       >
         {/* 左侧提示符 */}
         <Box marginRight={1}>
-          <Text color="green">➜ </Text>
+          <Text color={THEME.userAccent}>&gt;</Text>
         </Box>
 
         {/* 右侧输入组件 */}

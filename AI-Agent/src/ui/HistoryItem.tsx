@@ -1,7 +1,8 @@
 import React from "react";
 import { Box, Text } from "ink";
-import { StatusBadge } from "./App.tsx"; // ⚠️ 请根据实际路径调整
-import { MarkdownText } from "./App.tsx"; // ⚠️ 请根据实际路径调整
+import { StatusBadge } from "./App.tsx"; // 保持你的引入路径
+import { MarkdownText } from "./App.tsx"; // 保持你的引入路径
+import { THEME } from "./utils/theme.ts";
 
 interface HistoryItemProps {
   item: {
@@ -19,7 +20,6 @@ export const HistoryItem: React.FC<HistoryItemProps> = ({ item }) => {
   }
 
   // 2. 【美化】工具调用/执行日志
-  // 检测是否包含 "Executed" 或 "Approved execution"
   const isToolLog =
     item.content.includes("Executed") ||
     item.content.includes("Approved execution");
@@ -31,11 +31,14 @@ export const HistoryItem: React.FC<HistoryItemProps> = ({ item }) => {
 
     return (
       <Box marginLeft={4} marginY={0}>
-        <Text color="gray" dimColor>
+        {/* 左侧图标/前缀：使用暗色 (Dim) */}
+        <Text color={THEME.textDim}>
           {isSuccess ? "✔ " : "⚙️ "}
           {isSuccess ? "已执行: " : "调用中: "}
         </Text>
-        <Text color={isSuccess ? "blue" : "yellow"} dimColor>
+
+        {/* 工具名称：成功用抹茶绿，进行中用系统橙或淡紫 */}
+        <Text color={isSuccess ? THEME.tool : THEME.system} bold>
           {toolName}
         </Text>
       </Box>
@@ -43,29 +46,46 @@ export const HistoryItem: React.FC<HistoryItemProps> = ({ item }) => {
   }
 
   // 3. 【常规】普通消息渲染
+
+  // 预先决定颜色，避免 JSX 里写太复杂的逻辑
+  let textColor = THEME.textUser; // 默认用户颜色
+  let roleColor = THEME.userAccent;
+
+  if (item.role === "ai") {
+    textColor = THEME.textAi; // 淡灰
+    roleColor = THEME.aiAccent; // 柔和蓝
+  } else if (item.role === "system") {
+    textColor = THEME.system; // 橙黄
+    roleColor = THEME.system;
+  }
+
   return (
     <Box flexDirection="row" marginBottom={1}>
+      {/* 左侧头像/状态徽章 */}
       <Box width={2} marginRight={1}>
-        <StatusBadge role={item.role} />
+        <Text color={roleColor}>
+          <StatusBadge role={item.role} />
+        </Text>
       </Box>
 
       <Box flexDirection="column" flexGrow={1}>
+        {/* Case A: 系统消息 */}
         {item.role === "system" ? (
-          <Text color="yellow" dimColor>
-            {item.content}
-          </Text>
+          <Text color={THEME.system}>{item.content}</Text>
         ) : item.role === "ai" ? (
+          /* Case B: AI 回复 */
           <Box flexDirection="column">
-            {/* 优化思考过程显示 */}
-            {item.reasoning && (
-              <Text color="gray" italic dimColor>
-                ↳ 🧠 思考中...
-              </Text>
-            )}
-            <MarkdownText content={item.content} />
+            {/* AI 正文内容 */}
+            {/* 注意：MarkdownText 内部最好也能接收 color 属性，或者由父级控制 */}
+            <Box>
+              <MarkdownText content={item.content} />
+            </Box>
           </Box>
         ) : (
-          <Text bold>{item.content}</Text>
+          /* Case C: 用户消息 - 使用白烟色 */
+          <Text color={THEME.textUser} bold>
+            {item.content}
+          </Text>
         )}
       </Box>
     </Box>
