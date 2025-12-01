@@ -56,6 +56,7 @@ export const parseUserInput = async (state: AgentState) => {
 };
 
 
+
 // 总结对话历史，截取最新6条message
 export const summarizeConversation = async (state: AgentState) => {
   // 首先获取现有的摘要
