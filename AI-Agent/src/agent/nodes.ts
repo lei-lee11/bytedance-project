@@ -328,6 +328,18 @@ export const agent = async (state: AgentState) => {
   };
 };
 
+// 节点：推进当前 todo 索引（在工具执行后调用）
+export const advanceTodo = async (state: AgentState) => {
+  const todos = state.todos || [];
+  const currentTodoIndex = state.currentTodoIndex ?? 0;
+  if (todos.length === 0) return {};
+  // 如果已经到末尾则不再推进
+  if (currentTodoIndex >= todos.length) return {};
+  return {
+    currentTodoIndex: currentTodoIndex + 1,
+  };
+};
+
 // 优化后的humanReviewNode实现
 export const humanReviewNode = async (state: AgentState) => {
   const messages = state.messages;

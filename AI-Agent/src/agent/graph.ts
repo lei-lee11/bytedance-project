@@ -69,6 +69,10 @@ const workflow = new StateGraph(StateAnnotation)
   .addNode("agent", agent)
   .addNode("toolNode", toolNode)
   .addNode("human_review", humanReviewNode)
+  .addNode("advance_todo", async (state) => {
+    // 简单桥接：返回 partial state 来推进索引
+    return { currentTodoIndex: (state.currentTodoIndex ?? 0) + 1 };
+  })
   // 入口：先跑 planner，一次性写好 todos / 项目信息等
   .addEdge(START, "planner")
   .addEdge("planner", "agent")
@@ -82,7 +86,8 @@ const workflow = new StateGraph(StateAnnotation)
   })
   // 敏感工具 -> 人工审批 -> 工具 -> agent
   .addEdge("human_review", "toolNode")
-  .addEdge("toolNode", "agent")
+  .addEdge("toolNode", "advance_todo")
+  .addEdge("advance_todo", "agent")
   // 总结只是压缩上下文，不结束，继续 agent
   .addEdge("summarize", "agent");
 

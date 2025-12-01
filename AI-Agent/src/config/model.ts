@@ -5,7 +5,7 @@ import { tools } from "../utils/tools/index.ts";
 // 从环境变量读取 API Key 与可选的模型/基础 URL，避免在代码中硬编码敏感信息。
 const arkApiKey = process.env.ARK_API_KEY || process.env.OPENAI_API_KEY || "";
 const arkBaseURL = process.env.ARK_BASE_URL || "https://ark.cn-beijing.volces.com/api/v3";
-const arkModel = process.env.ARK_MODEL || "doubao-1-5-vision-pro-250328";
+const arkModel = process.env.ARK_MODEL || "doubao-seed-1-6-250615";
 
 export const baseModel = new ChatOpenAI({
   model: arkModel,
