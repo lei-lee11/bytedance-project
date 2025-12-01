@@ -1,0 +1,2 @@
+{"timestamp":1764594692036,"event_type":"session_created","content":"Session Started","display_priority":"high","metadata":{"title":"CLI Session"}}
+{"event_type":"session_updated","content":"\n=== Session List ===\nID: cli-session-134efe70 | 📝 CLI Session | 💬 0\nID: cli-session-30f3994c | 📝 CLI Session | 💬 63\nID: cli-session-7d6fb9c5 | 📝 CLI Session | 💬 2\nUse /switch <id> to change session.","display_priority":"medium","metadata":{},"timestamp":1764595100026}

@@ -220,7 +220,7 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
     async (val: string) => {
       const input = val.trim();
       if (!input) return;
-
+      if (showLogo) setShowLogo(false);
       // ---  指令处理逻辑 ---
 
       // 1. 新建会话
@@ -272,7 +272,7 @@ Use /switch <id> to change session.`,
 
       if (!threadId) return;
 
-      if (showLogo) setShowLogo(false);
+
 
       try {
         //  使用 Hook 添加用户消息
@@ -387,11 +387,10 @@ Use /switch <id> to change session.`,
 
       {/*   底部固定区域 */}
       <Box flexDirection="column" marginTop={1}>
-        {/* 状态栏/分隔线 */}
         <StatusBar threadId={threadId} />
 
-        {/* 输入框 / 审批卡片 */}
         <Box paddingX={1} paddingBottom={1}>
+          {/* 这里的 InputArea 现在包含了 SuggestionBox */}
           {awaitingApproval ? (
             <ApprovalCard tool={pendingTool!} onSelect={handleApprovalSelect} />
           ) : (

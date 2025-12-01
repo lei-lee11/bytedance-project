@@ -1,0 +1,51 @@
+// src/components/SuggestionBox.tsx
+import React from "react";
+import { Box, Text } from "ink";
+import { THEME } from "../utils/theme.ts";
+
+interface Command {
+  value: string;
+  description: string;
+}
+
+interface SuggestionBoxProps {
+  items: Command[];
+  selectedIndex: number;
+}
+
+export const SuggestionBox: React.FC<SuggestionBoxProps> = ({
+  items,
+  selectedIndex,
+}) => {
+  if (items.length === 0) return null;
+
+  return (
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={THEME.aiAccent} // 使用亮色边框表示激活状态
+      paddingX={1}
+      width={50} // 固定宽度或根据内容自适应
+      marginBottom={0}
+    >
+      {items.map((item, index) => {
+        const isSelected = index === selectedIndex;
+        return (
+          <Box key={item.value}>
+            <Text
+              color={isSelected ? THEME.bg : THEME.textDim}
+              backgroundColor={isSelected ? THEME.aiAccent : undefined}
+              bold={isSelected}
+            >
+              {isSelected ? " > " : "   "}
+              {item.value.padEnd(10)}
+              <Text color={isSelected ? THEME.bg : THEME.textDim} italic>
+                {item.description}
+              </Text>
+            </Text>
+          </Box>
+        );
+      })}
+    </Box>
+  );
+};
