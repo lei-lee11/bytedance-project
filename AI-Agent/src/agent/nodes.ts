@@ -38,6 +38,7 @@ import { tools } from "../utils/tools/index.ts";
 import { randomUUID } from "crypto";
 const MAX_RETRIES = 5;
 import { project_tree } from "../utils/tools/project_tree.ts";
+import { attachFilesToContext } from "../utils/tools/fileContext.js";
 
 //解析用户输入，提取用户意图
 export const parseUserInput = async (state: AgentState) => {
@@ -86,6 +87,46 @@ export const summarizeConversation = async (state: AgentState) => {
   };
 };
 
+/**
+ * 处理用户引用的文件，将内容直接注入为系统消息
+ * 这样文件内容只在当前轮次使用，不会持久化累积
+ */
+export const processReferencedFiles = async (state: AgentState) => {
+  const newFilePaths = state.pendingFilePaths || [];
+  
+  if (newFilePaths.length === 0) {
+    return {}; // 没有新文件，不做任何操作
+  }
+
+  try {
+    const projectRoot = state.projectRoot || process.cwd();
+    
+    // 读取并格式化文件
+    const { formattedContext } = await attachFilesToContext(
+      newFilePaths,
+      projectRoot
+    );
+
+    // 将文件内容作为 SystemMessage 直接注入到消息流
+    // 这样内容会成为对话历史的一部分，可被 summarize 压缩
+    const fileContextMessage = new SystemMessage({
+      content: formattedContext,
+      additional_kwargs: {
+        message_type: 'file_context',
+      },
+    });
+
+    return {
+      messages: [fileContextMessage], // 直接添加到消息流
+      pendingFilePaths: [], // 清空待处理队列
+    };
+  } catch (error) {
+    console.error('Failed to process referenced files:', error);
+    return {
+      pendingFilePaths: [], // 清空以避免重复错误
+    };
+  }
+};
 
 //扫描项目结构
 export const injectProjectTreeNode = async (state: AgentState) => {
@@ -254,12 +295,15 @@ export const toolNode = new ToolNode(tools);
 export const agent = async (state: AgentState) => {
   let { messages } = state;
   const { summary } = state;
+  
+  // 只处理 summary，文件内容已经在消息流中
   if (summary) {
     const systemMessage = new SystemMessage({
       content: `Summary of conversation earlier: ${summary}`,
     });
     messages = [systemMessage, ...messages];
-  }
+  }  
+  
   const response = await modelWithTools.invoke(messages);
   return { messages: [...messages, response] };
 };

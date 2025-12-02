@@ -15,7 +15,7 @@ export const baseModel = new ChatDeepSeek({
   maxRetries: 3,
   // 增大超时，避免网络或推理稍长时过早超时
   timeout: 60000,
-  apiKey: "fc223d35-9d61-483a-9d5b-7d319d2b7494",
+  apiKey: arkApiKey,
   configuration: {
     // 注意：这里应为主机根路径（不包含 /chat/completions），SDK 会在内部追加相应路径
     baseURL: arkBaseURL,

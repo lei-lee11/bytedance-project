@@ -51,6 +51,12 @@ export const StateAnnotation = Annotation.Root({
     value: (_prev: ProjectProfile | undefined, next: ProjectProfile | undefined) => next,
     default: () => undefined,
   }),
+  
+  // 待处理的文件路径（临时字段，处理后清空）
+  pendingFilePaths: Annotation<string[]>({
+    reducer: (_prev: string[], next: string[]) => next,
+    default: () => [],
+  }),
 });
 
 export type AgentState = typeof StateAnnotation.State;

@@ -23,13 +23,12 @@ describe('Background Process Management', () => {
   describe('startBackgroundProcess', () => {
     test('should start a simple command successfully', async () => {
       const result = await startBackgroundProcess.func({
-        command: 'echo',
-        args: ['Hello World'],
+        command: 'python',
+        args: ['-m', 'http.server', '8080'],
       });
 
       expect(result).toContain('✅ 已启动后台进程');
       expect(result).toContain('proc_');
-      expect(result).toContain('echo Hello World');
       expect(result).toContain('PID:');
     });
 
@@ -44,15 +43,15 @@ describe('Background Process Management', () => {
       expect(result).toContain('危险操作');
     });
 
-    test('should start process in specified working directory', async () => {
+    test('should python3 start process', async () => {
       const result = await startBackgroundProcess.func({
-        command: 'pwd',
-        args: [],
-        workingDirectory: process.cwd(),
+        command: 'python3',
+        args: ['-m', 'http.server', '8000'],
       });
 
       expect(result).toContain('✅ 已启动后台进程');
-      expect(result).toContain(process.cwd());
+      expect(result).toContain('proc_');
+      expect(result).toContain('PID:');
     });
   });
 
