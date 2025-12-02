@@ -25,7 +25,7 @@ export const SuggestionBox: React.FC<SuggestionBoxProps> = ({
       borderStyle="round"
       borderColor={THEME.aiAccent} // 使用亮色边框表示激活状态
       paddingX={1}
-      width={50} // 固定宽度或根据内容自适应
+      width={60} // 固定宽度或根据内容自适应
       marginBottom={0}
     >
       {items.map((item, index) => {

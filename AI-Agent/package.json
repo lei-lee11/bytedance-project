@@ -10,6 +10,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
+    "dev": "tsx watch src/cli.tsx",
     "start:cli": "tsx src/cli.tsx",
     "clean": "rm -rf dist",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --testPathPattern=\\.test\\.ts$ --testPathIgnorePatterns=\\.int\\.test\\.ts$",

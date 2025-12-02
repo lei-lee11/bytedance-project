@@ -12,6 +12,7 @@ import { HistoryItem } from "./HistoryItem.js";
 import { InputArea } from "./components/TextInput/InputArea.js";
 import { storage } from "./test.js"; //测试用
 import { useSessionManager } from "./hooks/useSessionManager.ts";
+import { useMessageProcessor } from "./hooks/useMessageProcessor.ts";
 import { StatusBar } from "./components/StatusBar.tsx";
 
 marked.setOptions({
@@ -64,7 +65,8 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
     switchSession,
     addMessage, // 统一的消息添加入口（自动处理 UI + 持久化）
   } = useSessionManager();
-
+  const { processInput, isProcessing: isContextProcessing } =
+    useMessageProcessor();
   // 实时状态
   const [currentAIContent, setCurrentAIContent] = useState("");
   const [currentReasoning, setCurrentReasoning] = useState("");
@@ -78,7 +80,11 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
 
   // --- 发送消息逻辑 ---
   const { run: sendMessage, loading: isThinking } = useRequest(
-    async (text: string | null, isResume = false) => {
+    async (
+      text: string | null,
+      isResume = false,
+      pendingFiles: string[] = [],
+    ) => {
       if (!threadId) return;
 
       setCurrentAIContent("");
@@ -95,7 +101,10 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
       try {
         const inputs = isResume
           ? null
-          : { messages: [new HumanMessage(text!)] };
+          : {
+              messages: [new HumanMessage(text!)],
+              pendingFilePaths: pendingFiles,
+            };
         const stream = await graph.streamEvents(inputs, config);
 
         if (!stream) return;
@@ -221,6 +230,18 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
       const input = val.trim();
       if (!input) return;
       if (showLogo) setShowLogo(false);
+
+      const processedResult = await processInput(input);
+      // 第三步：存入数据库 & 更新 UI
+      await addMessage(
+        "user",
+        processedResult.content, // 这里是包含了文件内容的完整 Prompt
+        undefined,
+        {
+          ...processedResult.metadata,
+          pendingFilePaths: processedResult.pendingFilePaths, // 添加 pendingFilePaths 到 metadata
+        },
+      );
       // ---  指令处理逻辑 ---
 
       // 1. 新建会话
@@ -272,14 +293,16 @@ Use /switch <id> to change session.`,
 
       if (!threadId) return;
 
-
-
       try {
         //  使用 Hook 添加用户消息
         await addMessage("user", input);
 
         // 触发 AI
-        sendMessage(input, false);
+        sendMessage(
+          processedResult.content,
+          false, // isResume
+          processedResult.pendingFilePaths,
+        );
       } catch (error) {
         console.error("Failed to process user message:", error);
         await addMessage("system", "Error: Failed to process message.");
@@ -331,7 +354,9 @@ Use /switch <id> to change session.`,
     },
     { manual: true },
   );
-
+  const stableSessionList = useMemo(() => {
+    return sessionList;
+  }, [JSON.stringify(sessionList.map((s) => s.metadata.thread_id))]);
   // 加载中状态
   if (isLoading) {
     return (
@@ -394,7 +419,11 @@ Use /switch <id> to change session.`,
           {awaitingApproval ? (
             <ApprovalCard tool={pendingTool!} onSelect={handleApprovalSelect} />
           ) : (
-            <InputArea onSubmit={handleUserSubmit} isLoading={isThinking} />
+            <InputArea
+              onSubmit={handleUserSubmit}
+              isLoading={isThinking}
+              sessions={stableSessionList}
+            />
           )}
         </Box>
       </Box>
