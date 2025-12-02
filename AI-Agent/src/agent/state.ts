@@ -35,6 +35,7 @@ export const StateAnnotation = Annotation.Root({
     default: () => "C:\\projects\\playground" // 🟢 默认根目录（在 TS 里要双反斜杠）
   }),
 
+  
   // 最近一次获取的项目目录树的消息 ID（用于引用和避免重复注入）
   projectTreeMessageId: Annotation<string>(),
 
