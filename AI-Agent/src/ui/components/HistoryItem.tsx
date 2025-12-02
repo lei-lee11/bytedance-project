@@ -1,8 +1,8 @@
 import React from "react";
 import { Box, Text } from "ink";
-import { StatusBadge } from "./App.tsx"; // 保持你的引入路径
-import { MarkdownText } from "./App.tsx"; // 保持你的引入路径
-import { THEME } from "./utils/theme.ts";
+import { StatusBadge } from "../App.tsx"; // 保持你的引入路径
+import { MarkdownText } from "../App.tsx"; // 保持你的引入路径
+import { THEME } from "../utils/theme.ts";
 
 interface HistoryItemProps {
   item: {

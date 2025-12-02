@@ -190,11 +190,11 @@ export const InputArea: FC<InputAreaProps> = ({
     <Box flexDirection="column" marginTop={1}>
       <Box marginBottom={0} paddingX={1} justifyContent="space-between">
         <Text color="gray" dimColor>
-          [Enter] 换行 | [Ctrl + X] 提交
+          [Enter] New Line | [Ctrl + X] Subimt
         </Text>
         {showSuggestions && (
           <Text color={THEME.aiAccent} dimColor>
-            [↑/↓] 选择 | [Tab] 补全
+            [↑/↓] | [Tab]
           </Text>
         )}
       </Box>
@@ -220,7 +220,7 @@ export const InputArea: FC<InputAreaProps> = ({
             value={query}
             onChange={setQuery}
             onSubmit={handleSubmit}
-            placeholder="输入 / 指令或 @ 引用文件..."
+            placeholder="Type your message..."
             focus={!isLoading}
             visibleLines={8}
             onSuggestionNavigate={handleSuggestionNavigate}

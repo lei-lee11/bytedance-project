@@ -5,11 +5,11 @@ import { marked } from "marked";
 import TerminalRenderer from "marked-terminal";
 import { HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { graph } from "../agent/graph.js";
-import { Header } from "./Header.js";
-import { MinimalThinking } from "./MinimalThinking.js";
-import { ApprovalCard } from "./ApprovalCard.js";
-import { HistoryItem } from "./HistoryItem.js";
-import { InputArea } from "./components/TextInput/InputArea.js";
+import { Header } from "./components/Header.tsx";
+import { MinimalThinking } from "./components/MinimalThinking.tsx";
+import { ApprovalCard } from "./components/ApprovalCard.tsx";
+import { HistoryItem } from "./components/HistoryItem.tsx";
+import { InputArea } from "./components/TextInput/InputArea.tsx";
 import { storage } from "./test.js"; //测试用
 import { useSessionManager } from "./hooks/useSessionManager.ts";
 import { useMessageProcessor } from "./hooks/useMessageProcessor.ts";
