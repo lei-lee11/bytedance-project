@@ -58,6 +58,18 @@ export const StateAnnotation = Annotation.Root({
     default: () => undefined,
   }),
 
+  // 最近一次由 project planner 生成的可读计划文本
+  projectPlanText: Annotation<string>(),
+
+  // planner 提取出的技术栈摘要（可选）
+  techStackSummary: Annotation<string>(),
+
+  // planner 输出的工程级初始化步骤（数组）
+  projectInitSteps: Annotation<string[]>({
+    value: (_prev, next) => next,
+    default: () => [],
+  }),
+
   todos: Annotation<string[]>({
     // 如果没设置过，默认是空数组
     value: (_prev, next) => next,
@@ -82,3 +94,31 @@ export type ProjectProfile = {
 };
 
 // projectProfile 类型已定义并作为 Annotation 包含在 StateAnnotation 内
+
+export function createAgentState(overrides: Partial<AgentState> = {}): AgentState {
+  const base: AgentState = {
+    messages: [],
+    summary: "",
+    currentTask: "",
+    codeContext: "",
+    programmingLanguage: "TypeScript",
+    retryCount: 0,
+    reviewResult: "",
+    projectRoot: overrides.projectRoot ?? "C:\\projects\\playground",
+    projectTreeMessageId: "",
+    projectTreeInjected: false,
+    projectTreeText: "",
+    testPlanText: "",
+    projectProfile: undefined,
+    projectPlanText: "",
+    techStackSummary: "",
+    projectInitSteps: [],
+    todos: [],
+    currentTodoIndex: 0,
+  } as AgentState;
+
+  return {
+    ...base,
+    ...overrides,
+  };
+}

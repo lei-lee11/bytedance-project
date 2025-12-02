@@ -1,6 +1,11 @@
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 import { spawn, ChildProcess } from "child_process";
+import path from "path";
+import fs from "fs/promises";
+
+const toErrorMessage = (err: unknown): string =>
+  err instanceof Error ? err.message : String(err);
 
 // 进程信息接口
 export interface ProcessInfo {
@@ -46,7 +51,7 @@ class ProcessManager {
 
     const child = spawn(command, args, {
       cwd: cwd || process.cwd(),
-      shell: true,
+      shell: false,
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -76,11 +81,11 @@ class ProcessManager {
       }
     });
 
-    child.on("error", (err: any) => {
+    child.on("error", (err: unknown) => {
       const p = this.processes.get(id);
       if (p) {
         p.status = "error";
-        this.addLog(id, `[error] ${err?.message ?? String(err)}`);
+        this.addLog(id, `[error] ${toErrorMessage(err)}`);
       }
     });
 
@@ -99,18 +104,21 @@ class ProcessManager {
     const p = this.processes.get(id);
     if (!p) throw new Error(`process not found: ${id}`);
     if (p.status !== "running") return true;
-    if (!p.process) {
+    const processHandle = p.process;
+    if (!processHandle) {
       p.status = "error";
       throw new Error(`invalid process handle`);
     }
 
     return new Promise((resolve) => {
-      const proc = p.process!;
+      const proc = processHandle;
       const killTimeout = setTimeout(() => {
         try {
           proc.kill("SIGKILL");
           this.addLog(id, `[system] force killed`);
-        } catch (e) {}
+        } catch (error) {
+          this.addLog(id, `[error] force kill failed: ${toErrorMessage(error)}`);
+        }
         resolve(true);
       }, 5000);
 
@@ -122,10 +130,10 @@ class ProcessManager {
           p.status = "stopped";
           resolve(true);
         });
-      } catch (err: any) {
+      } catch (err: unknown) {
         clearTimeout(killTimeout);
         p.status = "error";
-        this.addLog(id, `[error] stop failed: ${err?.message ?? String(err)}`);
+        this.addLog(id, `[error] stop failed: ${toErrorMessage(err)}`);
         resolve(false);
       }
     });
@@ -165,7 +173,9 @@ class ProcessManager {
     Array.from(this.processes.values()).forEach((p) => {
       try {
         p.process?.kill("SIGKILL");
-      } catch (e) {}
+      } catch (error) {
+        console.warn(`Kill process ${p.id} failed: ${toErrorMessage(error)}`);
+      }
     });
     this.processes.clear();
     this.nextId = 1;
@@ -173,6 +183,38 @@ class ProcessManager {
 }
 
 const processManager = ProcessManager.getInstance();
+
+const BLOCKED_COMMANDS = new Set([
+  "rm",
+  "rd",
+  "del",
+  "format",
+  "mkfs",
+  "shutdown",
+  "reboot",
+  "poweroff",
+]);
+
+const SHELL_META = /[;&|]/;
+
+async function resolveSafeWorkingDirectory(dir?: string): Promise<string> {
+  const base = path.resolve(process.env.AGENT_PROJECT_ROOT || process.cwd());
+  if (!dir) {
+    await fs.access(base).catch(() => fs.mkdir(base, { recursive: true }));
+    return base;
+  }
+
+  const candidate = path.isAbsolute(dir)
+    ? path.resolve(dir)
+    : path.resolve(base, dir);
+
+  if (!candidate.toLowerCase().startsWith(base.toLowerCase())) {
+    throw new Error(`工作目录必须位于项目根目录内：${base}`);
+  }
+
+  await fs.access(candidate);
+  return candidate;
+}
 
 const startDescription =
   "在系统终端启动一个后台进程（非阻塞），并返回进程 ID。支持指定工作目录。示例: command='python', args=['-m','http.server','8080']。";
@@ -194,7 +236,17 @@ export const startBackgroundProcess = new DynamicStructuredTool({
         actual = map[command] ?? command;
       }
 
-      const id = processManager.startProcess(actual, args, workingDirectory, description);
+      if (BLOCKED_COMMANDS.has(actual.toLowerCase())) {
+        return `❌ 启动失败: 命令 ${actual} 被列入禁止执行清单`;
+      }
+
+      if (args.some((arg) => SHELL_META.test(arg))) {
+        return "❌ 启动失败: 参数中包含 shell 特殊字符 (& | ;)";
+      }
+
+      const resolvedCwd = await resolveSafeWorkingDirectory(workingDirectory);
+
+      const id = processManager.startProcess(actual, args, resolvedCwd, description);
       const info = processManager.getProcess(id);
       const startTimeText = info?.startTime ? info.startTime.toLocaleString() : "未知";
 
@@ -202,13 +254,13 @@ export const startBackgroundProcess = new DynamicStructuredTool({
       res += `📝 命令: ${actual} ${args.join(" ")}\n`;
       if (actual !== command) res += `ℹ️ 原命令 '${command}' 已转换为 '${actual}'\n`;
       res += `🆔 PID: ${info?.pid ?? "N/A"}\n`;
-      res += `📂 工作目录: ${workingDirectory ?? process.cwd()}\n`;
+      res += `📂 工作目录: ${resolvedCwd}\n`;
       res += `⏰ 启动时间: ${startTimeText}\n\n`;
       res += `提示: 使用 get_process_logs 和 stop_background_process 管理进程。`;
 
       return res;
-    } catch (err: any) {
-      return `❌ 启动失败: ${err?.message ?? String(err)}`;
+    } catch (err: unknown) {
+      return `❌ 启动失败: ${toErrorMessage(err)}`;
     }
   },
 });
@@ -230,8 +282,8 @@ export const stopBackgroundProcess = new DynamicStructuredTool({
       const logs = processManager.getProcessLogs(processId, 5);
       if (logs.length) res += `\n最近日志:\n${logs.join("\n")}`;
       return res;
-    } catch (err: any) {
-      return `❌ 停止失败: ${err?.message ?? String(err)}`;
+    } catch (err: unknown) {
+      return `❌ 停止失败: ${toErrorMessage(err)}`;
     }
   },
 });
@@ -260,8 +312,8 @@ export const getProcessLogs = new DynamicStructuredTool({
       const logs = processManager.getProcessLogs(processId, Math.min(tailLines, 1000));
       if (!logs.length) return `ℹ️ 进程 ${processId} 暂无日志`;
       return logs.join("\n");
-    } catch (err: any) {
-      return `❌ 获取日志失败: ${err?.message ?? String(err)}`;
+    } catch (err: unknown) {
+      return `❌ 获取日志失败: ${toErrorMessage(err)}`;
     }
   },
 });

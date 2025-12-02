@@ -1,32 +1,15 @@
 // AI-Agent/tests/agent_flow.test.ts
 import { jest } from '@jest/globals';
-import { generateCode, generateTests } from "../src/agent/nodes.ts";
-import { AgentState } from "../src/agent/state.js";
+import { generateCode, generateTests } from "../src/agent/nodes.js";
+import { AgentState, createAgentState } from "../src/agent/state.js";
 
 jest.setTimeout(180_000); // 调模型可能稍微久一点，给点时间，延长到 3 分钟
 
 function makeInitialState(): AgentState {
-  return {
-    // LangGraph state
-    messages: [],
-    summary: "",
-
-    // 我们自己加的这些字段
+  return createAgentState({
     currentTask: "实现 twoSum 函数，输入整数数组和目标值，返回两数之和的索引，并补充单元测试。",
-    programmingLanguage: "TypeScript",
-    codeContext: "",
-
-    retryCount: 0,
-    reviewResult: "",
-
     projectRoot: process.cwd(),
-    projectTreeMessageId: "",
-    projectTreeInjected: false,
-    projectTreeText: "",
-
-    // 新增的测试计划字段（如果你在 Annotation 里是可选的，可以去掉这一行）
-    testPlanText: "",
-  } as AgentState;
+  });
 }
 
 describe("Agent code → tests flow", () => {
@@ -40,11 +23,12 @@ describe("Agent code → tests flow", () => {
     const stateAfterCode: AgentState = {
       ...initialState,
       ...deltaAfterCode,
+      testPlanText: deltaAfterCode.testPlanText ?? initialState.testPlanText,
     };
 
     expect(stateAfterCode.messages.length).toBeGreaterThan(0);
 
-    const lastCodeMsg = stateAfterCode.messages.at(-1)!;
+    const lastCodeMsg = stateAfterCode.messages[stateAfterCode.messages.length - 1]!;
     const lastCodeContent = String(lastCodeMsg.content);
 
     // 粗检查：是否包含 Step 结构（思维链 + 测试计划）
@@ -71,7 +55,7 @@ describe("Agent code → tests flow", () => {
       stateAfterCode.messages.length,
     );
 
-    const lastTestMsg = stateAfterTests.messages.at(-1)!;
+    const lastTestMsg = stateAfterTests.messages[stateAfterTests.messages.length - 1]!;
     const lastTestContent = String(lastTestMsg.content);
 
     // 粗检查：是否有“单测结构”的痕迹

@@ -41,6 +41,32 @@ import { randomUUID } from "crypto";
 const MAX_RETRIES = 5;
 import { project_tree } from "../utils/tools/project_tree.ts";
 
+type ToolLike = {
+  name?: string;
+  metadata?: { name?: string };
+  func?: (
+    args: Record<string, unknown>,
+    config?: Record<string, unknown>,
+  ) => Promise<unknown> | unknown;
+};
+
+type ToolCall = {
+  name: string;
+  args?: Record<string, unknown>;
+};
+
+// 结构化输出 schema：project planner
+const ProjectPlanSchema = z.object({
+  projectPlanText: z.string(),
+  techStackSummary: z.string().optional(),
+  projectInitSteps: z.array(z.string()).optional(),
+});
+
+// 结构化输出 schema：task planner（返回 todos 列表）
+const TaskPlanSchema = z.object({
+  todos: z.array(z.string()),
+});
+
 //解析用户输入，提取用户意图
 export const parseUserInput = async (state: AgentState) => {
   const historyText = state.messages
@@ -162,7 +188,7 @@ export const generateCode = async (state: AgentState) => {
 
   return {
     messages: [...messages, response],
-    testPlanText, 
+    testPlanText: testPlanText ?? state.testPlanText ?? "",
   };
 };
 
@@ -195,13 +221,14 @@ export const generateTests = async (state: AgentState) => {
   }
 
   // 2. 构造 Prompt —— 把之前的测试计划（如果有）一起传进去
-  const promptText = buildUnitTestOnlyPrompt({
+  const promptArgs = {
     currentTask,
     programmingLanguage,
     codeUnderTest,
-    // 这里就是我们刚才说的 existingTestPlan，可选
     existingTestPlan: testPlanText,
-  } as any); // 如果你的 buildUnitTestOnlyPrompt 还没更新签名，这里可以先去改它
+  } as Parameters<typeof buildUnitTestOnlyPrompt>[0];
+
+  const promptText = buildUnitTestOnlyPrompt(promptArgs);
 
   const systemMsg = new SystemMessage({ content: promptText });
 
@@ -253,6 +280,90 @@ export const reviewCode = async (state: AgentState) => {
 
 export const toolNode = new ToolNode(tools);
 
+export async function projectPlannerNode(state: AgentState): Promise<Partial<AgentState>> {
+  const lastUser = state.messages[state.messages.length - 1];
+  const projectRoot = state.projectRoot || ".";
+
+  const system = new SystemMessage({
+    content: [
+      "你是架构规划助手，只负责决定技术栈和项目结构，不负责拆细粒度 ToDo。",
+      "你需要输出结构化结果：projectPlanText, techStackSummary, projectInitSteps。",
+      "projectInitSteps 必须是可以直接执行的工程级初始化步骤（例如：创建项目、安装依赖、生成配置文件、初始化样式框架等）。",
+      "不要输出额外说明或自由文本，严格按结构化格式返回。",
+    ].join("\n"),
+  });
+
+  const user = new HumanMessage({
+    content: [
+      `项目根目录：\`${projectRoot}\``,
+      "用户需求：",
+      "--------------------------------",
+      lastUser?.content ?? "",
+      "--------------------------------",
+    ].join("\n"),
+  });
+
+  const structured = baseModel.withStructuredOutput(ProjectPlanSchema);
+  const res = await structured.invoke([system, user]);
+
+  // 兼容性处理：确保字段存在
+  const projectPlanText = (res.projectPlanText as string) || String(res.projectPlanText || "");
+  const techStackSummary = (res.techStackSummary as string) || "";
+  const projectInitSteps = Array.isArray(res.projectInitSteps) ? res.projectInitSteps : [];
+
+  // 把可读的计划文本写回消息流（不要直接 push 结构化对象）
+  const snapshot = `PROJECT_PLANNER_SNAPSHOT:\nprojectInitSteps=${projectInitSteps.length}, techStackSummary=${techStackSummary.slice(0,100)}, planPreview=${projectPlanText.slice(0,200)}`;
+  return {
+    messages: [...state.messages, new SystemMessage({ content: projectPlanText }), new SystemMessage({ content: snapshot })],
+    projectPlanText,
+    techStackSummary,
+    projectInitSteps,
+  } as Partial<import("./state.js").AgentState>;
+}
+
+export async function taskPlannerNode(state: AgentState): Promise<Partial<AgentState>> {
+  const lastUser = state.messages[state.messages.length - 1];
+  const projectPlan = state.projectPlanText ?? "";
+  const initSteps = state.projectInitSteps ?? [];
+
+  const system = new SystemMessage({
+    content: [
+      "你是开发任务拆解助手，负责生成可以直接执行的 ToDo 列表。",
+      "前几条任务必须覆盖上游提供的 projectInitSteps（不允许遗漏）。",
+      "只输出结构化字段 todos（string[]）。",
+    ].join("\n"),
+  });
+
+  const user = new HumanMessage({
+    content: [
+      "===== 项目规划文档 =====",
+      projectPlan,
+      "",
+      "===== 上游提供的工程级前置步骤 projectInitSteps =====",
+      initSteps.map((s: string, i: number) => `${i + 1}. ${s}`).join("\n"),
+      "",
+      "===== 用户原始需求 =====",
+      lastUser?.content ?? "",
+      "",
+      "请根据以上信息生成一个有序的 ToDo 列表（todos 字段），前几条必须覆盖所有 projectInitSteps。",
+    ].join("\n"),
+  });
+
+  const structured = baseModel.withStructuredOutput(TaskPlanSchema);
+  const res = await structured.invoke([system, user]);
+
+  const todos = Array.isArray(res.todos) ? res.todos : [];
+
+  // 把 todos 写入消息流以便下游能看到最新的文本消息
+  const todosText = todos.length ? `ToDos:\n${todos.map((t: string, i: number) => `${i + 1}. ${t}`).join("\n")}` : "";
+  return {
+    messages: [...state.messages, new SystemMessage({ content: todosText || "(无 ToDo)" })],
+    todos,
+    currentTodoIndex: 0,
+    currentTask: "根据 ToDo 列表逐条完成开发任务",
+  } as Partial<import("./state.js").AgentState>;
+}
+
 // 自定义工具执行器：直接执行模型请求的 tool_calls，并把结果或错误作为消息写回 state
 export const toolExecutor = async (state: AgentState) => {
   const messages = state.messages || [];
@@ -263,12 +374,16 @@ export const toolExecutor = async (state: AgentState) => {
     return {};
   }
 
-  const toolCalls = ((lastMessage as unknown) as { tool_calls?: unknown }).tool_calls as Array<any> | undefined || [];
+  const toolCalls: ToolCall[] = Array.isArray((lastMessage as { tool_calls?: unknown }).tool_calls)
+    ? (lastMessage as { tool_calls?: ToolCall[] }).tool_calls ?? []
+    : [];
   if (!toolCalls.length) return {};
 
   for (const call of toolCalls) {
     const name = call.name;
-    const args = call.args || {};
+    const rawArgs = call.args || {};
+    const sanitizedArgs: Record<string, unknown> = { ...rawArgs };
+    let skipCall = false;
 
     // 遍历 args，检测可能的路径参数并强制为绝对路径或报错
     const strict = process.env.STRICT_ABSOLUTE_PATHS === "true";
@@ -276,9 +391,9 @@ export const toolExecutor = async (state: AgentState) => {
 
       const isPathKey = (k: string) => /\b(?:path|file|dir|directory|workingDir|workingDirectory|file_path|filePath|target)\b/i.test(k);
 
-    for (const key of Object.keys(args)) {
+    for (const key of Object.keys(rawArgs)) {
       if (!isPathKey(key)) continue;
-      const raw = args[key];
+      const raw = rawArgs[key];
       if (typeof raw !== "string" || raw.trim() === "") continue;
       // 如果已经是绝对路径，校验是否越界
       if (path.isAbsolute(raw)) {
@@ -290,11 +405,11 @@ export const toolExecutor = async (state: AgentState) => {
           outMsgs.push(
             new SystemMessage({ content: `路径参数拒绝：${key} -> ${raw}（不得超出 projectRoot: ${projectRootBase}）` }),
           );
-          // 跳过本次工具调用
+          skipCall = true;
           continue;
         }
         // 合法，继续
-        args[key] = resolved;
+        sanitizedArgs[key] = resolved;
         continue;
       }
 
@@ -303,6 +418,7 @@ export const toolExecutor = async (state: AgentState) => {
         outMsgs.push(
           new SystemMessage({ content: `路径参数必须为绝对路径：${key} -> ${raw}. 请提供以盘符或 '/' 开头的绝对路径。` }),
         );
+        skipCall = true;
         continue;
       }
 
@@ -314,22 +430,30 @@ export const toolExecutor = async (state: AgentState) => {
         outMsgs.push(
           new SystemMessage({ content: `解析后的路径超出 projectRoot：${key} -> ${resolved}（原始：${raw}）。已拒绝。` }),
         );
+        skipCall = true;
         continue;
       }
-      args[key] = resolved;
+      sanitizedArgs[key] = resolved;
+    }
+
+    if (skipCall) {
+      outMsgs.push(new SystemMessage({ content: `工具 ${name} 已被跳过，请修正路径参数后重试。` }));
+      continue;
     }
 
     // 查找对应工具实例
-    const tool = (tools as Array<unknown>).find((t: any) => (t && (t.name === name || (t.metadata && t.metadata.name === name))));
-    if (!tool) {
+    const tool = (tools as ToolLike[]).find(
+      (t) => t && (t.name === name || t.metadata?.name === name),
+    );
+    if (!tool || typeof tool.func !== "function") {
       outMsgs.push(new SystemMessage({ content: `工具未找到: ${name}` }));
       continue;
     }
 
     try {
       // 调用工具：把 state.projectRoot 放入 config.configurable 里，便于工具获取
-      const config = { configurable: { projectRoot: state.projectRoot } } as unknown as Record<string, unknown>;
-      const result = await (tool as any).func?.(args, config);
+      const config = { configurable: { projectRoot: state.projectRoot } } as Record<string, unknown>;
+      const result = await tool.func?.(sanitizedArgs, config);
       outMsgs.push(new SystemMessage({ content: `工具 ${name} 执行成功：\n${String(result)}` }));
     } catch (err) {
       const errMsg = typeof err === "string" ? err : (err as Error)?.message || String(err);
@@ -338,8 +462,12 @@ export const toolExecutor = async (state: AgentState) => {
   }
 
   if (outMsgs.length === 0) return {};
+  
+  // 关键优化：每次工具执行后，强制重置项目目录注入标志为false
+  // 这样下次agent调用前会重新获取最新的项目结构
   return {
     messages: [...messages, ...outMsgs],
+    projectTreeInjected: false,
   };
 };
 
@@ -352,11 +480,27 @@ export const agent = async (state: AgentState) => {
     todos = [],
     currentTodoIndex = 0,
     currentTask,
+    projectTreeText
   } = state;
 
   const contextMessages: SystemMessage[] = [];
-
-  // 1. 当前要做的 Todo / 任务
+  
+  // 1. 添加项目结构信息（如果有），限制大小以避免上下文过大
+  if (projectTreeText && projectTreeText.trim()) {
+    // 限制项目树文本的大小，避免上下文超限
+    const maxTreeLength = 5000; // 设置合理的最大长度
+    const truncatedTreeText = projectTreeText.length > maxTreeLength 
+      ? projectTreeText.substring(0, maxTreeLength) + '\n...（项目结构过大，已截断）'
+      : projectTreeText;
+    
+    contextMessages.push(
+      new SystemMessage({
+        content: `## 当前项目结构\n\n${truncatedTreeText}\n`
+      }),
+    );
+  }
+  
+  // 2. 当前要做的 Todo / 任务
   const todoFromList = todos[currentTodoIndex];
   const effectiveTask = todoFromList || currentTask; // 优先用 todo 列表里的
 
@@ -484,7 +628,7 @@ export const humanReviewNode = async (state: AgentState) => {
 };
 
 
-function parseTodos(planText: string): string[] {
+export function parseTodos(planText: string): string[] {
   const lines = planText.split("\n");
 
   const start = lines.findIndex((line) =>
@@ -519,109 +663,5 @@ export async function plannerNode(state: AgentState): Promise<Partial<AgentState
   return {
     ...projectRes,
     ...taskRes,
-  };
-}
-
-// ---------- 新增：projectPlannerNode ----------
-export async function projectPlannerNode(state: AgentState): Promise<Partial<AgentState>> {
-  const lastUser = state.messages[state.messages.length - 1];
-  const projectRoot = state.projectRoot ?? "C:\\projects\\playground";
-
-  const system = new SystemMessage({
-    content: [
-      "你是架构规划助手，只负责决定技术栈和项目结构，不负责拆细粒度 ToDo。",
-      "你需要输出：",
-      "1) 技术栈与整体思路（简短）",
-      "2) 目标项目目录结构（tree）",
-      "3) 为了让这套技术栈能跑起来，必须完成的工程级前置步骤（列表）",
-      "注意：不要写执行过程，不要说‘我现在要做什么’，只写静态规划。",
-    ].join("\n"),
-  });
-
-  const user = new HumanMessage({
-    content: [
-      `项目根目录（由系统传入）：\`${projectRoot}\``,
-      "",
-      "用户需求：",
-      "--------------------------------",
-      lastUser?.content ?? "",
-      "--------------------------------",
-    ].join("\n"),
-  });
-
-  const res = await baseModel.invoke([system, user]);
-  const planText = (res as AIMessage).content as string;
-
-  // 从 planText 中尝试抽取工程级初始化步骤（简单实现：查找标题下的列表）
-  const projectInitSteps: string[] = [];
-  const lines = planText.split("\n");
-  let capture = false;
-  for (const line of lines) {
-    const t = line.trim();
-    if (/^###?\s*工程|初始化|前置步骤/i.test(t)) {
-      capture = true;
-      continue;
-    }
-    if (capture) {
-      if (/^#{1,3}\s/.test(t)) break; // 下一个标题停止
-      if (/^[-•\d.]/.test(t)) projectInitSteps.push(t.replace(/^[-•\d.\s]+/, "").trim());
-    }
-  }
-
-  // 尝试从 planText 中抽取技术栈一句话摘要（取第一段简短说明）
-  const techStackSummary = (planText.split("\n\n")[0] || "").slice(0, 400);
-
-  return {
-    messages: [...state.messages, res],
-    // 新增字段使用 any 断言以兼容当前 StateType 定义
-    ...( { projectPlanText: planText, techStackSummary, projectInitSteps } as unknown as Record<string, unknown> ),
-    projectProfile: {
-      ...(state.projectProfile ?? {}),
-      primaryLanguage: state.projectProfile?.primaryLanguage ?? "TypeScript",
-      detectedLanguages: state.projectProfile?.detectedLanguages ?? ["TypeScript", "JavaScript"],
-      testFrameworkHint: state.projectProfile?.testFrameworkHint ?? "Vitest",
-    },
-  } as Partial<AgentState>;
-}
-
-// ---------- 新增：taskPlannerNode ----------
-export async function taskPlannerNode(state: AgentState): Promise<Partial<AgentState>> {
-  const lastUser = state.messages[state.messages.length - 1];
-  const _s = (state as unknown) as Record<string, unknown>;
-  const projectPlan = (_s.projectPlanText as string) ?? "";
-  const initSteps = (_s.projectInitSteps as string[]) ?? [];
-
-  const system = new SystemMessage({
-    content: [
-      "你是开发任务拆解助手，负责生成可以直接执行的 ToDo 列表。",
-      "必须严格基于上游给出的项目规划（技术栈、结构、初始化步骤），不能自说自话。",
-      "前几条 ToDo 必须覆盖 projectInitSteps，后续再拆具体的页面/组件/数据任务。",
-      "只输出 ToDo 列表本身，每行一条，不要加标题或解释。",
-    ].join("\n"),
-  });
-
-  const user = new HumanMessage({
-    content: [
-      "===== 项目规划文档 =====",
-      projectPlan,
-      "",
-      "===== 上游提供的工程级前置步骤 projectInitSteps =====",
-      initSteps.map((s: string, i: number) => `${i + 1}. ${s}`).join("\n"),
-      "",
-      "===== 用户原始需求 =====",
-      lastUser?.content ?? "",
-      "",
-      "请根据以上信息生成完整的开发 ToDo 列表。",
-    ].join("\n"),
-  });
-
-  const res = await baseModel.invoke([system, user]);
-  const todos = parseTodos((res as AIMessage).content as string);
-
-  return {
-    messages: [...state.messages, res],
-    todos,
-    currentTodoIndex: 0,
-    currentTask: "根据 ToDo 列表逐条完成开发任务",
   };
 }

@@ -1,4 +1,4 @@
-import { injectProjectTreeNode } from "../src/agent/nodes";
+import { injectProjectTreeNode } from "../src/agent/nodes.js";
 
 type AnyState = Record<string, any>;
 

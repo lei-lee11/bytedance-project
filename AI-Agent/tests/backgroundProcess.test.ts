@@ -39,9 +39,8 @@ describe('Background Process Management', () => {
         args: ['-rf', '/'],
       });
 
-      expect(result).toContain('❌');
-      expect(result).toContain('安全警告');
-      expect(result).toContain('危险操作');
+      expect(result).toContain('❌ 启动失败');
+      expect(result).toContain('禁止执行');
     });
 
     test('should start process in specified working directory', async () => {
@@ -60,7 +59,7 @@ describe('Background Process Management', () => {
     test('should return empty message when no processes', async () => {
       const result = await listBackgroundProcesses.func({});
 
-      expect(result).toContain('当前没有后台进程在运行');
+      expect(result).toContain('当前没有后台进程');
     });
 
     test('should list running processes', async () => {
@@ -75,7 +74,7 @@ describe('Background Process Management', () => {
 
       const result = await listBackgroundProcesses.func({});
 
-      expect(result).toContain('📊 后台进程列表');
+      expect(result).toContain('📊 后台进程');
       expect(result).toContain('proc_');
       expect(result).toContain('node');
       expect(result).toContain('running');
@@ -97,7 +96,7 @@ describe('Background Process Management', () => {
 
       const result = await listBackgroundProcesses.func({});
 
-      expect(result).toContain('共 2 个');
+      expect(result).toContain('📊 后台进程 (2)');
       expect(result).toContain('proc_1');
       expect(result).toContain('proc_2');
     });
@@ -110,8 +109,7 @@ describe('Background Process Management', () => {
         tailLines: 50,
       });
 
-      expect(result).toContain('❌');
-      expect(result).toContain('进程不存在');
+      expect(result).toContain('❌ 获取日志失败');
     });
 
     test('should capture stdout logs', async () => {
@@ -135,9 +133,8 @@ describe('Background Process Management', () => {
         tailLines: 10,
       });
 
-      expect(logsResult).toContain('📋 进程日志');
       expect(logsResult).toContain(processId);
-      expect(logsResult).toContain('echo Test Output');
+      expect(logsResult).toContain('Test Output');
     });
 
     test('should limit log lines', async () => {
@@ -166,8 +163,7 @@ describe('Background Process Management', () => {
         processId: 'proc_999',
       });
 
-      expect(result).toContain('❌');
-      expect(result).toContain('进程不存在');
+      expect(result).toContain('❌ 进程不存在');
     });
 
     test('should stop a running process', async () => {
@@ -193,7 +189,7 @@ describe('Background Process Management', () => {
         processId,
       });
 
-      expect(stopResult).toContain('已停止进程');
+      expect(stopResult).toContain('✅ 已停止');
       expect(stopResult).toContain(processId);
     });
 
@@ -215,7 +211,7 @@ describe('Background Process Management', () => {
         processId,
       });
 
-      expect(stopResult).toContain('已经停止');
+      expect(stopResult).toContain('ℹ️ 进程');
     });
   });
 
@@ -243,7 +239,7 @@ describe('Background Process Management', () => {
       const stopResult = await stopBackgroundProcess.func({
         processId,
       });
-      expect(stopResult).toContain('已停止进程');
+      expect(stopResult).toContain('✅ 已停止');
 
       // 再次检查列表
       const listResult2 = await listBackgroundProcesses.func({});
@@ -268,7 +264,7 @@ describe('Background Process Management', () => {
       await new Promise(resolve => setTimeout(resolve, 800));
 
       const beforeCleanup = await listBackgroundProcesses.func({});
-      expect(beforeCleanup).toContain('共 2 个');
+      expect(beforeCleanup).toContain('📊 后台进程 (2)');
       expect(beforeCleanup).toContain('running');
 
       // 清理所有进程

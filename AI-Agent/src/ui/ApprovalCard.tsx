@@ -1,6 +1,11 @@
 import { Box, Text } from "ink";
-import SelectInput from "ink-select-input"; 
-type PendingToolState = { name: string; args: any };
+import SelectInput from "ink-select-input";
+
+type PendingToolState = { name: string; args: Record<string, unknown> };
+type ChoiceValue = "approve" | "reject";
+type ChoiceItem = { label: string; value: ChoiceValue };
+type IndicatorProps = { isSelected: boolean };
+type ItemRendererProps = { isSelected: boolean; label: string };
 export const ApprovalCard = ({
   tool,
   onSelect,
@@ -8,8 +13,8 @@ export const ApprovalCard = ({
   tool: PendingToolState;
   onSelect: (choice: "approve" | "reject") => void;
 }) => {
-  const items = [
-    { label: "Run this command", value: "approve" }, 
+  const items: ChoiceItem[] = [
+    { label: "Run this command", value: "approve" },
     { label: "Abort", value: "reject" },
   ];
 
@@ -61,15 +66,15 @@ export const ApprovalCard = ({
       <Box marginLeft={2}>
         <SelectInput
           items={items}
-          onSelect={(item) => onSelect(item.value as "approve" | "reject")}
+          onSelect={(item: ChoiceItem) => onSelect(item.value)}
           isFocused={true}
           // 自定义指示器
-          indicatorComponent={({ isSelected }) => (
+          indicatorComponent={({ isSelected }: IndicatorProps) => (
             <Text color={isSelected ? "cyan" : "gray"}>
               {isSelected ? "● " : "○ "}
             </Text>
           )}
-          itemComponent={({ isSelected, label }) => (
+          itemComponent={({ isSelected, label }: ItemRendererProps) => (
             <Text color={isSelected ? "white" : "gray"} bold={isSelected}>
               {label}
             </Text>

@@ -1,4 +1,4 @@
-import React, { FC,useState, useEffect, useMemo } from "react";
+import { FC, useState, useEffect, useMemo } from "react";
 import { Box, Text, Static } from "ink"; // 移除了不必要的 Newline
 import { useRequest } from "ahooks";
 import { marked } from "marked";

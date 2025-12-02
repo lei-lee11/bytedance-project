@@ -53,6 +53,7 @@ export const buildUnitTestOnlyPrompt = (args: {
   currentTask: string;
   programmingLanguage: string;
   codeUnderTest: string;
+  existingTestPlan?: string;
 }) => `
 你是一个专业的测试工程师。你的任务是为已有的 ${args.programmingLanguage} 代码编写高质量的单元测试。
 
@@ -61,6 +62,10 @@ ${args.currentTask}
 
 待测试代码：
 ${args.codeUnderTest}
+
+${args.existingTestPlan ? `已有测试计划：
+${args.existingTestPlan}
+` : ""}
 
 ### Step 1: 测试目标理解
 - 复述代码的主要行为和关键分支
