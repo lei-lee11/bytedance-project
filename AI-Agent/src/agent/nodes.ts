@@ -301,8 +301,11 @@ export async function taskPlannerNode(state: AgentState): Promise<Partial<AgentS
 
   const system = new SystemMessage({
     content: [
-      "你是开发任务拆解助手，负责生成可以直接执行的 ToDo 列表。",
-      "前几条任务必须覆盖上游提供的 projectInitSteps（不允许遗漏）。",
+      "你是开发任务拆解助手，负责生成详细、可直接执行的 ToDo 列表。",
+      "任务描述必须详细具体，包含：1)具体目标 2)操作步骤 3)验收标准 4)预期成果。",
+      "前几条任务必须覆盖上游提供的 projectInitSteps（不允许遗漏），并对这些步骤进行详细描述和扩展。",
+      "确保每个任务描述足够清晰，让执行agent一看就知道要做什么、如何做、以及完成标准是什么。",
+      "任务粒度要适中，避免过于简单或过于复杂的任务描述。",
       "只输出结构化字段 todos（string[]）。",
     ].join("\n"),
   });
@@ -318,7 +321,13 @@ export async function taskPlannerNode(state: AgentState): Promise<Partial<AgentS
       "===== 用户原始需求 =====",
       lastUser?.content ?? "",
       "",
-      "请根据以上信息生成一个有序的 ToDo 列表（todos 字段），前几条必须覆盖所有 projectInitSteps。",
+      "请根据以上信息生成一个有序的 ToDo 列表（todos 字段）。每个任务描述必须包含：",
+      "1. 明确的任务目标 - 说明这个任务要实现什么",
+      "2. 具体的操作步骤 - 如何完成这个任务",
+      "3. 明确的验收标准 - 如何判断任务已完成",
+      "4. 预期输出成果 - 完成后会产生什么",
+      "",
+      "前几条任务必须覆盖并详细描述所有 projectInitSteps，每个任务描述长度建议在50-150字之间。",
     ].join("\n"),
   });
 
