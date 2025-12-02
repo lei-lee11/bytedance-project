@@ -103,9 +103,16 @@ const workflow = new StateGraph(StateAnnotation)
   .addNode("toolExecutor", wrapNode("toolExecutor", toolExecutor))
   .addNode("human_review", wrapNode("human_review", humanReviewNode))
   .addNode("advance_todo", async (state) => {
-    // 简单桥接：返回 partial state 来推进索引
-    return { currentTodoIndex: (state.currentTodoIndex ?? 0) + 1 };
-  })
+    // 安全地推进索引：确保索引不会超过todos数组长度
+    const currentIndex = state.currentTodoIndex ?? 0;
+    const todosLength = state.todos?.length ?? 0;
+    
+    // 只有当当前索引小于todos长度时才增加索引
+    const newIndex = currentIndex < todosLength ? currentIndex + 1 : currentIndex;
+    
+    console.log(`[advance_todo] 索引更新: ${currentIndex} -> ${newIndex}, todos长度: ${todosLength}`);
+    return { currentTodoIndex: newIndex };
+  }),
   .addNode("inject_project_tree", wrapNode("inject_project_tree", injectProjectTreeNode))
   // 入口：先跑 project_planner -> task_planner -> inject_project_tree -> agent
   .addEdge(START, "project_planner")
@@ -117,7 +124,7 @@ const workflow = new StateGraph(StateAnnotation)
     toolNode: "toolExecutor",        // 安全工具 -> 直接交给 toolExecutor 执行并记录
     human_review: "human_review", // 节点名保持一致
     summarize: "summarize",
-    continue: "agent",           // 优化：避免递归循环，直接回agent
+    continue: "inject_project_tree", // 重要修复：执行下一个任务前先经过inject_project_tree节点
     [END]: END,
   })
   // 敏感工具 -> 人工审批 -> 工具 -> 索引推进 -> agent
