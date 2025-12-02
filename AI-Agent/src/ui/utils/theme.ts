@@ -1,5 +1,6 @@
 // src/theme.ts
 export const THEME = {
+  bg: "#1a1b26",
   // 角色标识 & 边框
   aiAccent: "#7aa2f7", // 柔和蓝 (Agent 名字/图标)
   userAccent: "#bb9af7", // 淡紫 (User 名字/图标) - 紫色和蓝色互补，很好看

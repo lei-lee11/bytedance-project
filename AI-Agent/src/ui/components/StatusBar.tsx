@@ -30,8 +30,8 @@ export const StatusBar: React.FC<StatusBarProps> = ({ threadId }) => {
           </Text>
           <Text color={THEME.textDim}> │ </Text>
           <Text color={THEME.textDim}>
-            CMD: <Text color="white">/new</Text>,{" "}
-            <Text color="white">/list</Text>, <Text color="white">/switch</Text>
+            CMD: <Text color="white">"/" 选择工具</Text>,{" "}
+            <Text color="white">“@” 添加上下文</Text>
           </Text>
         </Text>
       </Box>
