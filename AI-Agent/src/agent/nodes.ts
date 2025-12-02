@@ -130,38 +130,11 @@ export const injectProjectTreeNode = async (state: AgentState) => {
     max_entries: 3000,
   });
 
-  const systemMsg = new SystemMessage({
-    content: `下面是当前项目的目录结构（已做截断，请在写代码时遵循该结构）：
-
-${treeText}`,
-  });
-
-  // 给这条 system 消息记录一个可追踪 id（也可以直接用 systemMsg.id，如果 LangChain 已经生成了）
-  const generatedId =
-    typeof randomUUID === "function"
-      ? randomUUID()
-      : `project-tree-${Date.now()}`;
-
-  // 设置 message id（部分 Message 实现可能不暴露 setter）
-  try {
-    (systemMsg as unknown as { id?: string }).id = generatedId;
-  } catch {
-    // ignore if not writable
-  }
-
-  // 如果之前有项目结构的 message，生成对应的删除指令
-  const deletes = state.projectTreeMessageId
-    ? [new RemoveMessage({ id: state.projectTreeMessageId })]
-    : [];
-
+  // 重要修改：不再向messages中添加项目树信息
+  // 只设置projectTreeText变量，让agent函数在需要时智能添加
+  
   return {
-    // ❗这里是关键：只返回删除 + 新消息，不要再拼 state.messages
-    messages: [
-      ...deletes,  // 删除旧的
-      systemMsg,   // 加新的
-    ],
     projectTreeText: treeText,
-    projectTreeMessageId: generatedId,
     projectTreeInjected: true,
   };
 };
