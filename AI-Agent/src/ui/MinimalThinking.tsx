@@ -1,4 +1,4 @@
-import React, { FC } from "react";
+import { FC } from "react";
 import Spinner from "ink-spinner";
 import { Box, Text } from "ink";
 import { THEME } from "./utils/theme.ts";

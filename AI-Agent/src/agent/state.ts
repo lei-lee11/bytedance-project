@@ -28,7 +28,10 @@ export const StateAnnotation = Annotation.Root({
   reviewResult: Annotation<string>(),
 
   // 项目根目录（一般在调用 graph 时初始化，比如 process.cwd()）
-  projectRoot: Annotation<string>(),
+  projectRoot: Annotation<string>({
+    value: (_prev, next) => next, // 每次显式设置时就覆盖
+    default: () => "C:\\projects\\playground", // 🟢 默认根目录（在 TS 里要双反斜杠）
+  }),
 
   // 最近一次获取的项目目录树的消息 ID（用于引用和避免重复注入）
   projectTreeMessageId: Annotation<string>(),
@@ -48,10 +51,36 @@ export const StateAnnotation = Annotation.Root({
 
   // 项目/用户画像：用于存储自动检测出的语言、首选测试命令等信息
   projectProfile: Annotation<ProjectProfile | undefined>({
-    value: (_prev: ProjectProfile | undefined, next: ProjectProfile | undefined) => next,
+    value: (
+      _prev: ProjectProfile | undefined,
+      next: ProjectProfile | undefined,
+    ) => next,
     default: () => undefined,
   }),
-  
+
+  // 最近一次由 project planner 生成的可读计划文本
+  projectPlanText: Annotation<string>(),
+
+  // planner 提取出的技术栈摘要（可选）
+  techStackSummary: Annotation<string>(),
+
+  // planner 输出的工程级初始化步骤（数组）
+  projectInitSteps: Annotation<string[]>({
+    value: (_prev, next) => next,
+    default: () => [],
+  }),
+
+  todos: Annotation<string[]>({
+    // 如果没设置过，默认是空数组
+    value: (_prev, next) => next,
+    default: () => [],
+  }),
+
+  currentTodoIndex: Annotation<number>({
+    value: (_prev, next) => next, // 覆盖式更新
+    default: () => 0,
+  }),
+
   // 待处理的文件路径（临时字段，处理后清空）
   pendingFilePaths: Annotation<string[]>({
     reducer: (_prev: string[], next: string[]) => next,
@@ -70,3 +99,33 @@ export type ProjectProfile = {
 };
 
 // projectProfile 类型已定义并作为 Annotation 包含在 StateAnnotation 内
+
+export function createAgentState(
+  overrides: Partial<AgentState> = {},
+): AgentState {
+  const base: AgentState = {
+    messages: [],
+    summary: "",
+    currentTask: "",
+    codeContext: "",
+    programmingLanguage: "TypeScript",
+    retryCount: 0,
+    reviewResult: "",
+    projectRoot: overrides.projectRoot ?? "C:\\projects\\playground",
+    projectTreeMessageId: "",
+    projectTreeInjected: false,
+    projectTreeText: "",
+    testPlanText: "",
+    projectProfile: undefined,
+    projectPlanText: "",
+    techStackSummary: "",
+    projectInitSteps: [],
+    todos: [],
+    currentTodoIndex: 0,
+  } as AgentState;
+
+  return {
+    ...base,
+    ...overrides,
+  };
+}

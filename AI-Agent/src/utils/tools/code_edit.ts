@@ -4,7 +4,6 @@ import fs from 'fs/promises';
 import path from 'path';
 import { backupManager } from './backup_manager.js';
 import { diffGenerator } from './diff_generator.js';
-import { syntaxChecker } from './syntax_checker.js';
 
 /**
  * 查找代码在文件中的精确匹配
@@ -86,7 +85,7 @@ const editCodeSnippet = new DynamicStructuredTool({
       .default(false)
       .describe("是否只预览不执行修改"),
   }),
-  func: async ({ file_path, old_code, new_code, language, preview_only = false }) => {
+  func: async ({ file_path, old_code, new_code, language: _language, preview_only = false }) => {
     try {
       // 1. 读取文件
       const resolvedPath = path.resolve(file_path);

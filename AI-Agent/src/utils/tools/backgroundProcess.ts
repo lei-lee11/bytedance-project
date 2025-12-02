@@ -1,31 +1,33 @@
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 import { spawn, ChildProcess } from "child_process";
+import path from "path";
+import fs from "fs/promises";
+
+const toErrorMessage = (err: unknown): string =>
+  err instanceof Error ? err.message : String(err);
 
 // 进程信息接口
-interface ProcessInfo {
+export interface ProcessInfo {
   id: string;
   command: string;
   args: string[];
+  description?: string;
+  process?: ChildProcess;
   pid?: number;
   status: "running" | "stopped" | "error";
-  startTime: Date;
+  startTime?: Date;
   exitCode?: number;
-  logs: string[]; // 最近 1000 行日志
-  process?: ChildProcess;
+  logs: string[];
 }
 
-// 进程管理器单例类
 class ProcessManager {
   private static instance: ProcessManager;
-  private processes: Map<string, ProcessInfo>;
-  private nextId: number;
-  private readonly MAX_LOG_LINES = 1000;
+  private processes: Map<string, ProcessInfo> = new Map();
+  private nextId = 1;
+  private MAX_LOG_LINES = 2000;
 
-  private constructor() {
-    this.processes = new Map();
-    this.nextId = 1;
-  }
+  private constructor() {}
 
   static getInstance(): ProcessManager {
     if (!ProcessManager.instance) {
@@ -34,437 +36,288 @@ class ProcessManager {
     return ProcessManager.instance;
   }
 
-  // 启动后台进程
-  startProcess(
-    command: string,
-    args: string[],
-    workingDirectory?: string
-  ): string {
-    const processId = `proc_${this.nextId++}`;
+  startProcess(command: string, args: string[] = [], cwd?: string, description?: string): string {
+    const id = `proc_${this.nextId++}`;
 
-    // 检查危险命令
-    const dangerousPatterns = [
-      "rm -rf",
-      "del /f",
-      "format",
-      "dd if=",
-      "mkfs",
-      ":(){:|:&};:",
-      "fork bomb",
-    ];
-
-    const fullCommand = `${command} ${args.join(" ")}`;
-    for (const pattern of dangerousPatterns) {
-      if (fullCommand.toLowerCase().includes(pattern)) {
-        throw new Error(
-          `⛔ 安全警告：命令包含危险操作 "${pattern}"，已阻止执行。`
-        );
-      }
-    }
-
-    // 创建进程信息
-    const processInfo: ProcessInfo = {
-      id: processId,
+    const info: ProcessInfo = {
+      id,
       command,
       args,
+      description,
       status: "running",
       startTime: new Date(),
       logs: [],
     };
 
-    try {
-      // 启动子进程
-      const childProcess = spawn(command, args, {
-        cwd: workingDirectory || process.cwd(),
-        shell: true,
-        detached: false,
+    const child = spawn(command, args, {
+      cwd: cwd || process.cwd(),
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    info.process = child;
+    info.pid = child.pid;
+
+    child.stdout?.on("data", (chunk) => {
+      const lines = chunk.toString().split(/\r?\n/);
+      lines.forEach((line: string) => {
+        if (line.trim()) this.addLog(id, `[stdout] ${line}`);
       });
+    });
 
-      processInfo.process = childProcess;
-      processInfo.pid = childProcess.pid;
-
-      // 监听标准输出
-      childProcess.stdout?.on("data", (data: Buffer) => {
-        const lines = data.toString().split("\n");
-        lines.forEach((line) => {
-          if (line.trim()) {
-            this.addLog(processId, `[stdout] ${line}`);
-          }
-        });
+    child.stderr?.on("data", (chunk) => {
+      const lines = chunk.toString().split(/\r?\n/);
+      lines.forEach((line: string) => {
+        if (line.trim()) this.addLog(id, `[stderr] ${line}`);
       });
+    });
 
-      // 监听标准错误
-      childProcess.stderr?.on("data", (data: Buffer) => {
-        const lines = data.toString().split("\n");
-        lines.forEach((line) => {
-          if (line.trim()) {
-            this.addLog(processId, `[stderr] ${line}`);
-          }
-        });
-      });
-
-      // 监听进程退出
-      childProcess.on("exit", (code, signal) => {
-        const info = this.processes.get(processId);
-        if (info) {
-          info.status = code === 0 ? "stopped" : "error";
-          info.exitCode = code || undefined;
-          this.addLog(
-            processId,
-            `[系统] 进程退出 - 退出码: ${code}, 信号: ${signal || "none"}`
-          );
-        }
-      });
-
-      // 监听错误
-      childProcess.on("error", (error) => {
-        const info = this.processes.get(processId);
-        if (info) {
-          info.status = "error";
-          this.addLog(processId, `[错误] ${error.message}`);
-        }
-      });
-
-      this.processes.set(processId, processInfo);
-      return processId;
-    } catch (error: any) {
-      processInfo.status = "error";
-      processInfo.logs.push(`[错误] 启动失败: ${error.message}`);
-      this.processes.set(processId, processInfo);
-      throw error;
-    }
-  }
-
-  // 添加日志（限制最大行数）
-  private addLog(processId: string, logLine: string) {
-    const info = this.processes.get(processId);
-    if (info) {
-      info.logs.push(`[${new Date().toISOString()}] ${logLine}`);
-      if (info.logs.length > this.MAX_LOG_LINES) {
-        info.logs.shift(); // 移除最旧的日志
+    child.on("exit", (code, signal) => {
+      const p = this.processes.get(id);
+      if (p) {
+        p.status = code === 0 ? "stopped" : "error";
+        p.exitCode = code ?? undefined;
+        this.addLog(id, `[system] exited code=${code} signal=${signal ?? "none"}`);
       }
-    }
+    });
+
+    child.on("error", (err: unknown) => {
+      const p = this.processes.get(id);
+      if (p) {
+        p.status = "error";
+        this.addLog(id, `[error] ${toErrorMessage(err)}`);
+      }
+    });
+
+    this.processes.set(id, info);
+    return id;
   }
 
-  // 停止进程
-  async stopProcess(processId: string): Promise<boolean> {
-    const info = this.processes.get(processId);
-    if (!info) {
-      throw new Error(`❌ 进程不存在: ${processId}`);
-    }
+  addLog(id: string, line: string) {
+    const p = this.processes.get(id);
+    if (!p) return;
+    p.logs.push(`[${new Date().toISOString()}] ${line}`);
+    if (p.logs.length > this.MAX_LOG_LINES) p.logs.shift();
+  }
 
-    if (info.status !== "running") {
-      return true; // 已经停止
-    }
-
-    if (!info.process || !info.pid) {
-      info.status = "error";
-      throw new Error(`❌ 无法停止进程: 进程句柄无效`);
+  async stopProcess(id: string): Promise<boolean> {
+    const p = this.processes.get(id);
+    if (!p) throw new Error(`process not found: ${id}`);
+    if (p.status !== "running") return true;
+    const processHandle = p.process;
+    if (!processHandle) {
+      p.status = "error";
+      throw new Error(`invalid process handle`);
     }
 
     return new Promise((resolve) => {
-      const process = info.process!;
-
-      // 设置超时强制杀死
+      const proc = processHandle;
       const killTimeout = setTimeout(() => {
         try {
-          process.kill("SIGKILL");
-          this.addLog(processId, "[系统] 强制终止进程 (SIGKILL)");
+          proc.kill("SIGKILL");
+          this.addLog(id, `[system] force killed`);
         } catch (error) {
-          // 进程可能已经退出
+          this.addLog(id, `[error] force kill failed: ${toErrorMessage(error)}`);
         }
         resolve(true);
-      }, 5000); // 5秒超时
+      }, 5000);
 
-      // 尝试优雅退出
       try {
-        process.kill("SIGTERM");
-        this.addLog(processId, "[系统] 发送终止信号 (SIGTERM)");
-
-        process.once("exit", () => {
+        proc.kill("SIGTERM");
+        this.addLog(id, `[system] sent SIGTERM`);
+        proc.once("exit", () => {
           clearTimeout(killTimeout);
-          info.status = "stopped";
+          p.status = "stopped";
           resolve(true);
         });
-      } catch (error: any) {
+      } catch (err: unknown) {
         clearTimeout(killTimeout);
-        info.status = "error";
-        this.addLog(processId, `[错误] 停止失败: ${error.message}`);
+        p.status = "error";
+        this.addLog(id, `[error] stop failed: ${toErrorMessage(err)}`);
         resolve(false);
       }
     });
   }
 
-  // 获取所有进程列表
   listProcesses(): ProcessInfo[] {
-    return Array.from(this.processes.values()).map((info) => ({
-      id: info.id,
-      command: info.command,
-      args: info.args,
-      pid: info.pid,
-      status: info.status,
-      startTime: info.startTime,
-      exitCode: info.exitCode,
-      logs: [], // 不返回完整日志
+    return Array.from(this.processes.values()).map((p) => ({
+      id: p.id,
+      command: p.command,
+      args: p.args,
+      description: p.description,
+      process: undefined,
+      pid: p.pid,
+      status: p.status,
+      startTime: p.startTime,
+      exitCode: p.exitCode,
+      logs: [],
     }));
   }
 
-  // 获取进程详情
-  getProcess(processId: string): ProcessInfo | undefined {
-    return this.processes.get(processId);
+  getProcess(id: string): ProcessInfo | undefined {
+    return this.processes.get(id);
   }
 
-  // 获取进程日志
-  getProcessLogs(processId: string, tailLines = 50): string[] {
-    const info = this.processes.get(processId);
-    if (!info) {
-      throw new Error(`❌ 进程不存在: ${processId}`);
-    }
-
-    // 返回最后 N 行
-    return info.logs.slice(-tailLines);
+  getProcessLogs(id: string, tail = 50): string[] {
+    const p = this.processes.get(id);
+    if (!p) throw new Error(`process not found: ${id}`);
+    return p.logs.slice(-tail);
   }
 
-  // 清理所有进程
   async cleanupAll(): Promise<void> {
-    const runningProcesses = Array.from(this.processes.values()).filter(
-      (p) => p.status === "running"
-    );
-
-    console.log(`🧹 清理 ${runningProcesses.length} 个后台进程...`);
-
-    const stopPromises = runningProcesses.map((p) => this.stopProcess(p.id));
-    await Promise.all(stopPromises);
-
-    console.log("✅ 所有后台进程已清理");
+    const running = Array.from(this.processes.values()).filter((x) => x.status === "running");
+    await Promise.all(running.map((r) => this.stopProcess(r.id)));
   }
 
-  // 重置进程管理器（用于测试）
   reset(): void {
-    // 停止所有运行中的进程
-    const runningProcesses = Array.from(this.processes.values()).filter(
-      (p) => p.status === "running" && p.process
-    );
-    
-    runningProcesses.forEach((p) => {
+    Array.from(this.processes.values()).forEach((p) => {
       try {
         p.process?.kill("SIGKILL");
       } catch (error) {
-        // 忽略错误
+        console.warn(`Kill process ${p.id} failed: ${toErrorMessage(error)}`);
       }
     });
-
-    // 清空进程映射
     this.processes.clear();
-    // 重置ID计数器
     this.nextId = 1;
   }
 }
 
-// 导出单例实例
 const processManager = ProcessManager.getInstance();
 
-// 工具1: 启动后台进程
-const startBackgroundProcess = new DynamicStructuredTool({
+const BLOCKED_COMMANDS = new Set([
+  "rm",
+  "rd",
+  "del",
+  "format",
+  "mkfs",
+  "shutdown",
+  "reboot",
+  "poweroff",
+]);
+
+const SHELL_META = /[;&|]/;
+
+async function resolveSafeWorkingDirectory(dir?: string): Promise<string> {
+  const base = path.resolve(process.env.AGENT_PROJECT_ROOT || process.cwd());
+  if (!dir) {
+    await fs.access(base).catch(() => fs.mkdir(base, { recursive: true }));
+    return base;
+  }
+
+  const candidate = path.isAbsolute(dir)
+    ? path.resolve(dir)
+    : path.resolve(base, dir);
+
+  if (!candidate.toLowerCase().startsWith(base.toLowerCase())) {
+    throw new Error(`工作目录必须位于项目根目录内：${base}`);
+  }
+
+  await fs.access(candidate);
+  return candidate;
+}
+
+const startDescription =
+  "在系统终端启动一个后台进程（非阻塞），并返回进程 ID。支持指定工作目录。示例: command='python', args=['-m','http.server','8080']。";
+
+export const startBackgroundProcess = new DynamicStructuredTool({
   name: "start_background_process",
-  description:
-    "启动一个后台进程（非阻塞）。适用于长期运行的服务，如 HTTP 服务器、数据库、开发服务器等。" +
-    "进程将在后台运行，不会阻塞 Agent 的其他操作。" +
-    "返回进程 ID，可用于后续管理（查看日志、停止进程等）。"+
-    "\n\n**重要提示**：" +
-    "\n- Windows 系统使用 'python' 而不是 'python3'" +
-    "\n- Windows 系统使用 'node' 而不是 'nodejs'" +
-    "\n- 路径分隔符：Windows 使用反斜杠 \\ 或正斜杠 /，Unix 使用正斜杠 /",
+  description: startDescription,
   schema: z.object({
-    command: z
-      .string()
-      .describe(
-        "要执行的命令（如 'python', 'node', 'npm' 等）。不要包含参数。"
-      ),
-    args: z
-      .array(z.string())
-      .optional()
-      .default([])
-      .describe(
-        "命令参数数组。例如: ['-m', 'http.server', '8080'] 或 ['run', 'dev']"
-      ),
-    workingDirectory: z
-      .string()
-      .optional()
-      .describe("工作目录（默认为当前目录）"),
+    command: z.string().describe("要执行的命令，不含参数"),
+    args: z.array(z.string()).optional().default([]),
+    workingDirectory: z.string().optional(),
+    description: z.string().optional(),
   }),
-  func: async ({ command, args = [], workingDirectory }) => {
+  func: async ({ command, args = [], workingDirectory, description }) => {
     try {
-      // Windows 命令兼容性转换
-      let actualCommand = command;
-      if (process.platform === 'win32') {
-        const commandMap: Record<string, string> = {
-          'python3': 'python',
-          'python3.exe': 'python.exe',
-          'pip3': 'pip',
-        };
-        actualCommand = commandMap[command] || command;
+      let actual = command;
+      if (process.platform === "win32") {
+        const map: Record<string, string> = { python3: "python", "python3.exe": "python.exe", pip3: "pip" };
+        actual = map[command] ?? command;
       }
-      const processId = processManager.startProcess(
-        actualCommand,
-        args,
-        workingDirectory
-      );
-      const info = processManager.getProcess(processId);
 
-      let result = `✅ 已启动后台进程: ${processId}\n`;
-      result += `📝 命令: ${actualCommand} ${args.join(" ")}\n`;  // ✅ 显示实际命令
-      if (actualCommand !== command) {
-        result += `ℹ️ 原命令 '${command}' 已自动转换为 '${actualCommand}' (Windows兼容)\n`;
+      if (BLOCKED_COMMANDS.has(actual.toLowerCase())) {
+        return `❌ 启动失败: 命令 ${actual} 被列入禁止执行清单`;
       }
-      result += `🆔 PID: ${info?.pid}\n`;
-      result += `📂 工作目录: ${workingDirectory || process.cwd()}\n`;
-      result += `⏰启动时间: ${info?.startTime.toLocaleString()}\n\n`;
-      result += `💡 提示: 使用 get_process_logs 查看日志，使用 stop_background_process 停止进程`;
 
-      return result;
-    } catch (error: any) {
-      return `❌ 启动进程失败: ${error.message}`;
+      if (args.some((arg) => SHELL_META.test(arg))) {
+        return "❌ 启动失败: 参数中包含 shell 特殊字符 (& | ;)";
+      }
+
+      const resolvedCwd = await resolveSafeWorkingDirectory(workingDirectory);
+
+      const id = processManager.startProcess(actual, args, resolvedCwd, description);
+      const info = processManager.getProcess(id);
+      const startTimeText = info?.startTime ? info.startTime.toLocaleString() : "未知";
+
+      let res = `✅ 已启动后台进程: ${id}\n`;
+      res += `📝 命令: ${actual} ${args.join(" ")}\n`;
+      if (actual !== command) res += `ℹ️ 原命令 '${command}' 已转换为 '${actual}'\n`;
+      res += `🆔 PID: ${info?.pid ?? "N/A"}\n`;
+      res += `📂 工作目录: ${resolvedCwd}\n`;
+      res += `⏰ 启动时间: ${startTimeText}\n\n`;
+      res += `提示: 使用 get_process_logs 和 stop_background_process 管理进程。`;
+
+      return res;
+    } catch (err: unknown) {
+      return `❌ 启动失败: ${toErrorMessage(err)}`;
     }
   },
 });
 
-// 工具2: 停止后台进程
-const stopBackgroundProcess = new DynamicStructuredTool({
+export const stopBackgroundProcess = new DynamicStructuredTool({
   name: "stop_background_process",
-  description:
-    "停止一个正在运行的后台进程。" +
-    "会先发送 SIGTERM 信号优雅退出，如果 5 秒内未退出则强制终止。",
-  schema: z.object({
-    processId: z
-      .string()
-      .describe("要停止的进程 ID（由 start_background_process 返回）"),
-  }),
+  description: "停止后台进程（先尝试优雅退出，超时则强制）。",
+  schema: z.object({ processId: z.string() }),
   func: async ({ processId }) => {
     try {
       const info = processManager.getProcess(processId);
-      if (!info) {
-        return `❌ 进程不存在: ${processId}`;
-      }
-
-      if (info.status !== "running") {
-        return `ℹ️ 进程 ${processId} 已经停止（状态: ${info.status}）`;
-      }
-
+      if (!info) return `❌ 进程不存在: ${processId}`;
+      if (info.status !== "running") return `ℹ️ 进程 ${processId} 状态: ${info.status}`;
       await processManager.stopProcess(processId);
-
-      const finalInfo = processManager.getProcess(processId);
-      let result = `✅ 已停止进程: ${processId}\n`;
-      result += `📝 命令: ${info.command} ${info.args.join(" ")}\n`;
-      result += `⏱️ 运行时长: ${Math.round((Date.now() - info.startTime.getTime()) / 1000)} 秒\n`;
-
-      if (finalInfo?.exitCode !== undefined) {
-        result += `🔢 退出码: ${finalInfo.exitCode}\n`;
-      }
-
-      // 显示最后几行日志
-      const recentLogs = processManager.getProcessLogs(processId, 5);
-      if (recentLogs.length > 0) {
-        result += `\n📋 最后几行日志:\n${recentLogs.join("\n")}`;
-      }
-
-      return result;
-    } catch (error: any) {
-      return `❌ 停止进程失败: ${error.message}`;
+      const final = processManager.getProcess(processId);
+      let res = `✅ 已停止: ${processId}\n`;
+      res += `命令: ${info.command} ${info.args.join(" ")}\n`;
+      if (final?.exitCode !== undefined) res += `退出码: ${final.exitCode}\n`;
+      const logs = processManager.getProcessLogs(processId, 5);
+      if (logs.length) res += `\n最近日志:\n${logs.join("\n")}`;
+      return res;
+    } catch (err: unknown) {
+      return `❌ 停止失败: ${toErrorMessage(err)}`;
     }
   },
 });
 
-// 工具3: 列出所有后台进程
-const listBackgroundProcesses = new DynamicStructuredTool({
+export const listBackgroundProcesses = new DynamicStructuredTool({
   name: "list_background_processes",
-  description:
-    "列出所有后台进程的信息，包括进程 ID、命令、状态、PID、运行时长等。",
+  description: "列出后台进程（ID、命令、状态、PID）。",
   schema: z.object({}),
   func: async () => {
-    const processes = processManager.listProcesses();
-
-    if (processes.length === 0) {
-      return "ℹ️ 当前没有后台进程在运行";
-    }
-
-    let result = `📊 后台进程列表 (共 ${processes.length} 个):\n\n`;
-
-    processes.forEach((proc) => {
-      const statusIcon =
-        proc.status === "running"
-          ? "🟢"
-          : proc.status === "stopped"
-            ? "⚪"
-            : "🔴";
-      const runningTime = Math.round(
-        (Date.now() - proc.startTime.getTime()) / 1000
-      );
-
-      result += `${statusIcon} ${proc.id}\n`;
-      result += `   命令: ${proc.command} ${proc.args.join(" ")}\n`;
-      result += `   状态: ${proc.status}\n`;
-      result += `   PID: ${proc.pid || "N/A"}\n`;
-      result += `   运行时长: ${runningTime} 秒\n`;
-      result += `   启动时间: ${proc.startTime.toLocaleString()}\n`;
-      if (proc.exitCode !== undefined) {
-        result += `   退出码: ${proc.exitCode}\n`;
-      }
-      result += "\n";
+    const list = processManager.listProcesses();
+    if (!list.length) return "ℹ️ 当前没有后台进程";
+    let out = `📊 后台进程 (${list.length}):\n\n`;
+    list.forEach((p) => {
+      out += `${p.id} | ${p.command} ${p.args.join(" ")} | ${p.status} | PID:${p.pid ?? "N/A"}\n`;
     });
-
-    result += `💡 提示: 使用 get_process_logs <process_id> 查看详细日志`;
-
-    return result;
+    return out;
   },
 });
 
-// 工具4: 获取进程日志
-const getProcessLogs = new DynamicStructuredTool({
+export const getProcessLogs = new DynamicStructuredTool({
   name: "get_process_logs",
-  description:
-    "获取指定后台进程的日志输出（stdout 和 stderr）。" +
-    "可以指定返回最后 N 行日志。",
-  schema: z.object({
-    processId: z.string().describe("进程 ID"),
-    tailLines: z
-      .number()
-      .optional()
-      .default(50)
-      .describe("返回最后 N 行日志（默认 50 行，最多 1000 行）"),
-  }),
+  description: "获取进程日志（可限制行数）。",
+  schema: z.object({ processId: z.string(), tailLines: z.number().optional().default(50) }),
   func: async ({ processId, tailLines = 50 }) => {
     try {
-      const info = processManager.getProcess(processId);
-      if (!info) {
-        return `❌ 进程不存在: ${processId}`;
-      }
-
-      const logs = processManager.getProcessLogs(
-        processId,
-        Math.min(tailLines, 1000)
-      );
-
-      let result = `📋 进程日志: ${processId}\n`;
-      result += `📝 命令: ${info.command} ${info.args.join(" ")}\n`;
-      result += `📊 状态: ${info.status}\n`;
-      result += `📏 日志行数: ${logs.length}\n`;
-      result += `\n${"=".repeat(60)}\n\n`;
-
-      if (logs.length === 0) {
-        result += "ℹ️ 暂无日志输出";
-      } else {
-        result += logs.join("\n");
-      }
-
-      return result;
-    } catch (error: any) {
-      return `❌ 获取日志失败: ${error.message}`;
+      const logs = processManager.getProcessLogs(processId, Math.min(tailLines, 1000));
+      if (!logs.length) return `ℹ️ 进程 ${processId} 暂无日志`;
+      return logs.join("\n");
+    } catch (err: unknown) {
+      return `❌ 获取日志失败: ${toErrorMessage(err)}`;
     }
   },
 });
 
-// 导出工具数组
 export const backgroundProcessTools = [
   startBackgroundProcess,
   stopBackgroundProcess,
@@ -472,21 +325,16 @@ export const backgroundProcessTools = [
   getProcessLogs,
 ];
 
-// 导出单个工具（用于测试）
-export {
-  startBackgroundProcess,
-  stopBackgroundProcess,
-  listBackgroundProcesses,
-  getProcessLogs,
-};
-
-// 导出清理函数
 export async function cleanupAllProcesses(): Promise<void> {
   await processManager.cleanupAll();
 }
 
-// 导出重置函数（仅用于测试）
 export function resetProcessManager(): void {
   processManager.reset();
 }
+
+
+
+
+
 
