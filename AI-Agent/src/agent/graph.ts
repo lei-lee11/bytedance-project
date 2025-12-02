@@ -9,6 +9,7 @@ import {
   toolNode,
   agent,
   humanReviewNode,
+  processReferencedFiles,
 } from "./nodes.ts";
 
 const checkpointer = new MemorySaver();
@@ -44,11 +45,13 @@ async function routeAgentOutput(state: AgentState) {
   return END;
 }
 const workflow = new StateGraph(StateAnnotation)
+  .addNode("process_files", processReferencedFiles)
   .addNode("summarize", summarizeConversation)
   .addNode("agent", agent)
   .addNode("tool", toolNode)
   .addNode("human_review", humanReviewNode)
-  .addEdge(START, "agent")
+  .addEdge(START, "process_files")
+  .addEdge("process_files", "agent")
   .addConditionalEdges("agent", routeAgentOutput, {
     toolNode: "tool", // 安全工具 -> 直接执行
     human_review: "human_review", // 敏感工具 -> 去审批

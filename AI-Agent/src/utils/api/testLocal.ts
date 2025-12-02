@@ -27,11 +27,17 @@ async function interactiveChat() {
     if (input.toLowerCase() === "quit") break;
 
     try {
+      // 支持文件引用格式: @file:path/to/file.ts
+      const fileRegex = /@file:([.\w/\\-]+)/g;
+      const matches = [...input.matchAll(fileRegex)];
+      const filePaths = matches.map(m => m[1]);
+      
       // 2. 初次运行图
       // 我们封装一个函数来处理流式输出，因为后面审批通过后还要复用这段逻辑
       await runAndHandleInterrupts(
         { messages: [new HumanMessage(input)] },
         config,
+        filePaths.length > 0 ? filePaths : undefined,
       );
     } catch (error) {
       console.error("Error:", error);
@@ -43,8 +49,17 @@ async function interactiveChat() {
 
 /**
  * 核心函数：运行图并在遇到中断时处理人工审批
+ * @param inputs - 输入数据
+ * @param config - 配置对象
+ * @param filePaths - 可选的文件路径数组
  */
-async function runAndHandleInterrupts(inputs: any, config: any) {
+async function runAndHandleInterrupts(inputs: any, config: any, filePaths?: string[]) {
+  // 如果提供了文件路径，添加到 inputs 中
+  if (filePaths && filePaths.length > 0) {
+    inputs.pendingFilePaths = filePaths;
+    inputs.projectRoot = process.cwd();
+  }
+  
   // 1. 运行图 (如果是恢复运行，inputs 应该是 null)
   let streamResponse = await graph.stream(inputs, config);
 
