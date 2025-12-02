@@ -473,19 +473,40 @@ export const agent = async (state: AgentState) => {
     );
   }
   
-  // 2. 当前要做的 Todo / 任务
+  // 2. 当前要做的 Todo / 任务 - 重点增强任务专注度
   const todoFromList = todos[currentTodoIndex];
   const effectiveTask = todoFromList || currentTask; // 优先用 todo 列表里的
+  const totalTasks = todos.length;
+  const currentTaskNumber = currentTodoIndex + 1;
 
   if (effectiveTask) {
     contextMessages.push(
       new SystemMessage({
         content:
-          `你正在帮用户完成一个编程小项目。\n` +
-          `当前只需要专注完成下面这一条任务（不要跳到后面的任务）：\n` +
-          `「${effectiveTask}」\n\n` +
-          `如果需要，可以调用可用的工具来完成这个任务。`,
+          `你是一个专注执行任务的开发助手。\n` +
+          `==========================\n` +
+          `📋 当前任务 (${currentTaskNumber}/${totalTasks}):\n` +
+          `「${effectiveTask}」\n` +
+          `==========================\n` +
+          `重要说明:\n` +
+          `- 你的唯一目标是完成当前任务，不要处理其他任务\n` +
+          `- 任务列表由 taskPlannerNode 生成，你必须严格按照计划执行\n` +
+          `- 任务完成后自然结束回复，工作流会自动推进到下一个任务\n` +
+          `- 如果遇到问题无法完成，明确说明原因\n` +
+          `- 可以使用工具来完成任务，如创建/修改文件、运行命令等\n` +
+          `\n请直接开始执行当前任务，不要询问用户确认。`
       }),
+    );
+  }
+  
+  // 添加任务列表概览，帮助agent了解全局进度
+  if (todos.length > 0) {
+    const todoSummary = `## 任务列表概览\n${todos.map((todo, idx) => 
+      `${idx === currentTodoIndex ? '🔄' : idx < currentTodoIndex ? '✅' : '⬜'} ${idx + 1}. ${todo}`
+    ).join('\n')}\n\n你现在正在执行任务 ${currentTaskNumber}。`;
+    
+    contextMessages.push(
+      new SystemMessage({ content: todoSummary })
     );
   }
 
