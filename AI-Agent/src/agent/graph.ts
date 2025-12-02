@@ -71,8 +71,8 @@ async function routeAgentOutput(state: AgentState) {
   // 注意：这里不推进索引，工具执行后会直接回到agent继续处理当前任务
   if (lastMessage && lastMessage._getType() === "tool_result") {
     console.log(`[路由调试] 收到工具执行结果，回到agent继续处理当前任务`);
-    // 工具执行后回到agent，继续处理当前任务，不推进索引
-    // 这种情况下不需要显式返回，因为我们已经修改了工作流连接
+    // 明确返回agent，确保工具执行后回到agent继续处理当前任务，不推进索引
+    return "agent";
   }
 
   // 3. 检查 todo 是否已经全部完成
@@ -94,13 +94,31 @@ async function routeAgentOutput(state: AgentState) {
                          lastMessage.content.trim().length > 0;
     
     if (isTaskSummary) {
-      console.log(`[路由调试] 检测到任务总结性回复，认为任务完成，推进到下一个任务`);
-      // 返回continue会推进索引，再执行下一个任务
-      return "continue";
+      // 增强任务完成判断：检查是否包含完成相关的关键词
+      const content = lastMessage.content.toLowerCase();
+      const containsCompletionWords = 
+        content.includes("完成") || 
+        content.includes("已成功") || 
+        content.includes("已经") ||
+        content.includes("已实现") ||
+        content.includes("已创建") ||
+        content.includes("已添加") ||
+        content.includes("success") ||
+        content.includes("completed") ||
+        content.includes("done") ||
+        content.includes("✅");
+      
+      if (containsCompletionWords) {
+        console.log(`[路由调试] 检测到任务完成信号，推进到下一个任务`);
+        return "continue"; // 推进索引，执行下一个任务
+      } else {
+        console.log(`[路由调试] 虽有回复但未检测到明确的任务完成信号，可能需要进一步交互`);
+        return END; // 如果没有明确的完成信号，结束工作流避免重复
+      }
     } else {
       console.log(`[路由调试] 未检测到明确的任务完成信号，继续处理当前任务`);
-      // 没有明确的任务完成信号，继续处理当前任务
-      // 这种情况通常不会发生，因为没有工具调用也没有内容会走到这里
+      // 如果到达这里，可能是工作流异常，返回agent继续
+      return "agent";
     }
   }
 
@@ -146,6 +164,7 @@ const workflow = new StateGraph(StateAnnotation)
     human_review: "human_review", // 节点名保持一致
     summarize: "summarize",
     continue: "advance_todo", // 关键修复：任务完成后先推进索引，再执行下一个任务
+    agent: "agent", // 明确添加agent到agent的自连接，用于工具执行后继续当前任务
     [END]: END,
   })
   // 敏感工具 -> 人工审批 -> 工具 -> 回到agent继续处理当前任务
