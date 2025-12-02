@@ -122,6 +122,7 @@ export function createAgentState(
     projectInitSteps: [],
     todos: [],
     currentTodoIndex: 0,
+    pendingFilePaths: [],
   } as AgentState;
 
   return {
