@@ -172,7 +172,26 @@ const workflow = new StateGraph(StateAnnotation)
   .addEdge("toolNode", "toolExecutor")
   .addEdge("toolExecutor", "agent") // 关键修复：工具执行后回到agent继续处理当前任务，不推进索引
   // 只有真正完成任务时才通过continue路由推进索引
-  .addEdge("advance_todo", "inject_project_tree") // 索引推进后更新项目结构
+  .addConditionalEdges("advance_todo", (state) => {
+    // 条件判断：检查索引推进后是否还有任务要执行
+    const newIndex = state.currentTodoIndex ?? 0;
+    const todosLength = state.todos?.length ?? 0;
+    
+    console.log(`[advance_todo路由] 新索引: ${newIndex}, todos长度: ${todosLength}`);
+    
+    // 如果索引已达到或超过todos长度，说明所有任务都已完成，直接结束工作流
+    if (newIndex >= todosLength) {
+      console.log(`[advance_todo路由] 所有任务已完成，结束工作流`);
+      return "end";
+    }
+    
+    // 否则继续执行下一个任务
+    console.log(`[advance_todo路由] 继续执行下一个任务`);
+    return "next_task";
+  }, {
+    "end": END,  // 所有任务完成，结束工作流
+    "next_task": "inject_project_tree"  // 继续执行下一个任务
+  })
   .addEdge("inject_project_tree", "agent") // 开始执行下一个任务
   // 总结只是压缩上下文，不结束，继续agent
   .addEdge("summarize", "agent");
