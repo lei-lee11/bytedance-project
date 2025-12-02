@@ -41,6 +41,10 @@ async function routeAgentOutput(state: AgentState) {
   const todos = state.todos ?? [];
   const currentTodoIndex = state.currentTodoIndex ?? 0;
   
+  // 获取当前任务描述
+  const currentTask = currentTodoIndex < todos.length ? todos[currentTodoIndex] : "";
+  const currentTaskLower = currentTask.toLowerCase();
+  
   // 添加调试日志，帮助追踪工作流状态
   console.log(`[路由调试] 当前状态 - todos长度: ${todos.length}, 当前索引: ${currentTodoIndex}`);
   if (currentTodoIndex < todos.length) {
@@ -96,21 +100,56 @@ async function routeAgentOutput(state: AgentState) {
     if (isTaskSummary) {
       // 增强任务完成判断：检查是否包含完成相关的关键词
       const content = lastMessage.content.toLowerCase();
-      const containsCompletionWords = 
-        content.includes("完成") || 
-        content.includes("已成功") || 
-        content.includes("已经") ||
-        content.includes("已实现") ||
-        content.includes("已创建") ||
-        content.includes("已添加") ||
-        content.includes("success") ||
-        content.includes("completed") ||
-        content.includes("done") ||
-        content.includes("✅");
       
-      if (containsCompletionWords) {
-        console.log(`[路由调试] 检测到任务完成信号，推进到下一个任务`);
+      // 明确的完成信号
+      const completionSignals = [
+        "已完成", "完成", "任务完成", "已实现", "实现了",
+        "success", "completed", "done", "✅", "已结束", "结束了",
+        "已完成当前任务", "本任务已完成", "已达成目标"
+      ];
+      
+      // 任务未完成的信号（避免重复）
+      const notCompleteSignals = [
+        "我会", "我将", "计划", "准备", "需要", "下一步", 
+        "接下来", "让我们", "我们需要", "让我来"
+      ];
+      
+      // 检查是否包含完成信号
+      const containsCompletionSignal = completionSignals.some(signal => 
+        content.includes(signal.toLowerCase())
+      );
+      
+      // 检查是否明确提到正在处理当前任务
+      const explicitlyHandlingTask = content.includes("正在处理") && 
+                                     (content.includes("任务") || content.includes(currentTaskLower));
+      
+      // 检查是否包含未完成信号
+      const containsNotCompleteSignal = notCompleteSignals.some(signal => 
+        content.includes(signal.toLowerCase())
+      );
+      
+      // 检查是否有工具执行结果的引用
+      const referencesToolResult = content.includes("根据") || 
+                                  content.includes("执行结果") || 
+                                  content.includes("显示") ||
+                                  content.includes("返回");
+      
+      // 优先级判断逻辑
+      if (containsCompletionSignal) {
+        console.log(`[路由调试] 检测到明确的任务完成信号，推进到下一个任务`);
         return "continue"; // 推进索引，执行下一个任务
+      } else if (explicitlyHandlingTask && !containsNotCompleteSignal) {
+        // 如果明确表示正在处理当前任务但没有未完成信号，可能需要继续
+        console.log(`[路由调试] 明确表示正在处理当前任务，继续处理`);
+        return "agent";
+      } else if (referencesToolResult && !containsCompletionSignal) {
+        // 引用了工具结果但没有完成信号，继续处理
+        console.log(`[路由调试] 引用工具结果，继续处理`);
+        return "agent";
+      } else if (content.length > 500 && !containsCompletionSignal) {
+        // 长文本但没有完成信号，可能是详细说明，继续处理
+        console.log(`[路由调试] 长文本响应，继续处理`);
+        return "agent";
       } else {
         console.log(`[路由调试] 虽有回复但未检测到明确的任务完成信号，可能需要进一步交互`);
         return END; // 如果没有明确的完成信号，结束工作流避免重复
