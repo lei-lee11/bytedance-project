@@ -194,15 +194,19 @@ export class SessionManager implements ISessionManager {
 
         await this.fileManager.appendHistory(threadId, historyRecord);
 
-        // 更新消息计数
+        // 更新消息计数 - 修复逻辑，避免重复计数
         const metadata = await this.fileManager.readMetadata(threadId);
         if (metadata) {
-            const messageCount = ['user_message', 'ai_response'].includes(event.event_type)
-                ? metadata.message_count + 1
-                : metadata.message_count;
+            // 获取所有历史记录，计算实际的用户消息和AI回复数量
+            const allHistory = await this.fileManager.readHistory(threadId);
+            const userMessages = allHistory.filter(record => record.event_type === 'user_message');
+            const aiMessages = allHistory.filter(record => record.event_type === 'ai_response');
+
+            // 基于实际的历史记录数更新计数，而不是简单+1
+            const actualMessageCount = userMessages.length + aiMessages.length;
 
             await this.updateSessionMetadata(threadId, {
-                message_count: messageCount, // 修复拼写错误，使用正确的变量名
+                message_count: actualMessageCount,
                 updated_at: Date.now()
             });
         }

@@ -8,6 +8,9 @@ export { HistoryManager } from './historyManager.js';
 export { LockManager } from './lockManagerSimple.js';
 // export { CheckpointManager } from './checkpointManager.js'; // 已注释，高级检查点功能暂不使用
 
+// LangGraph 适配器
+export { LangGraphStorageAdapter, createLangGraphAdapter } from './langgraphAdapter.js';
+
 // 工具函数
 export * from './utils.js';
 

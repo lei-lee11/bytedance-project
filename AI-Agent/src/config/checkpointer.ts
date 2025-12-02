@@ -1,13 +1,33 @@
-import { MongoDBSaver } from "@langchain/langgraph-checkpoint-mongodb";
-import { MongoClient } from "mongodb";
+import { StorageSystem } from "../storage/index.js";
+import { LangGraphStorageAdapter } from "../storage/langgraphAdapter.js";
 
-const DB_URI = "mongodb://localhost:27017";
-const DB_NAME = "AI-Agent-DB";
-const client = new MongoClient(DB_URI);
-export const closeConnection = async () => {
-  await client.close();
-};
-export const checkpointer = new MongoDBSaver({
-  client,
-  dbName: DB_NAME,
-});
+/**
+ * 创建 LangGraph 检查点保存器
+ * 使用自定义的存储系统适配器
+ */
+export async function createCheckpointer() {
+  // 创建存储系统实例
+  const storage = new StorageSystem({
+    basePath: "./data/langgraph-storage"
+  });
+
+  // 初始化存储系统
+  await storage.initialize();
+
+  // 创建 LangGraph 存储适配器
+  const checkpointer = new LangGraphStorageAdapter(storage);
+
+  return checkpointer;
+}
+
+/**
+ * 便捷函数：获取默认的检查点保存器
+ * 用于快速集成到图中
+ */
+export let checkpointer: LangGraphStorageAdapter;
+
+// 初始化检查点（异步）
+export async function initializeCheckpointer() {
+  checkpointer = await createCheckpointer();
+  return checkpointer;
+}

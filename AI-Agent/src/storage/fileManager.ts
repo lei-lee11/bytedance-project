@@ -74,9 +74,18 @@ export class FileManager {
     const { metadataPath } = this.getSessionPaths(threadId);
     try {
       const content = await fs.readFile(metadataPath, 'utf8');
-      return JSON.parse(content) as SessionMetadata;
+      const trimmed = content.trim();
+      if (!trimmed) {
+        console.warn(`⚠️ Metadata file is empty for session ${threadId}`);
+        return null;
+      }
+      return JSON.parse(trimmed) as SessionMetadata;
     } catch (error) {
       if ((error as any).code === 'ENOENT') {
+        return null;
+      }
+      if (error instanceof SyntaxError) {
+        console.warn(`⚠️ Invalid JSON in metadata file for session ${threadId}: ${error.message}`);
         return null;
       }
       throw new Error(`Failed to read metadata for session ${threadId}: ${error}`);
@@ -115,6 +124,12 @@ export class FileManager {
    */
   async appendCheckpoint(threadId: string, checkpoint: CheckpointRecord): Promise<void> {
     const { checkpointsPath } = this.getSessionPaths(threadId);
+
+    // 确保会话目录存在
+    if (!(await this.sessionExists(threadId))) {
+      await this.createSessionDirectory(threadId);
+    }
+
     const line = JSON.stringify(checkpoint) + '\n';
     await fs.appendFile(checkpointsPath, line, 'utf8');
   }
@@ -168,7 +183,11 @@ export class FileManager {
    * 追加历史记录
    */
   async appendHistory(threadId: string, record: HistoryRecord): Promise<void> {
-    const { historyPath } = this.getSessionPaths(threadId);
+    const { sessionDir, historyPath } = this.getSessionPaths(threadId);
+
+    // 确保会话目录存在
+    await fs.mkdir(sessionDir, { recursive: true });
+
     const line = JSON.stringify(record) + '\n';
     await fs.appendFile(historyPath, line, 'utf8');
   }

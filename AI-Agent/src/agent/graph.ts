@@ -1,8 +1,7 @@
 import { StateGraph, START, END } from "@langchain/langgraph";
 import { AIMessage } from "@langchain/core/messages";
 import { StateAnnotation, AgentState } from "./state.ts";
-import { MemorySaver } from "@langchain/langgraph";
-//import { checkpointer } from "../config/checkpointer.js";
+import { initializeCheckpointer } from "../config/checkpointer.js";
 import { SENSITIVE_TOOLS } from "../utils/tools/index.ts";
 import {
   summarizeConversation,
@@ -11,7 +10,8 @@ import {
   humanReviewNode,
 } from "./nodes.ts";
 
-const checkpointer = new MemorySaver();
+// 延迟初始化的检查点保存器
+let checkpointer: any; // 将动态初始化为 LangGraphStorageAdapter
 // 创建图实例
 async function routeAgentOutput(state: AgentState) {
   const messages = state.messages;
@@ -58,7 +58,17 @@ const workflow = new StateGraph(StateAnnotation)
   .addEdge("human_review", "tool")
   .addEdge("tool", "agent")
   .addEdge("summarize", END);
-export const graph = workflow.compile({
-  checkpointer: checkpointer,
-  interruptBefore: ["human_review"],
-});
+// 初始化图的函数
+export async function initializeGraph() {
+  if (!checkpointer) {
+    checkpointer = await initializeCheckpointer();
+  }
+
+  return workflow.compile({
+    checkpointer: checkpointer,
+    interruptBefore: ["human_review"],
+  });
+}
+
+// 延迟编译图，等待检查点初始化
+export let graph: any;
