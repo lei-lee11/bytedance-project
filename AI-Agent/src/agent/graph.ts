@@ -78,8 +78,7 @@ async function routeAgentOutput(state: AgentState) {
   // 3. 如果还有 todo 没做完，继续执行下一个任务
   if (hasTodos && currentTodoIndex < todos.length) {
     console.log(`[路由调试] 继续执行todo ${currentTodoIndex + 1}/${todos.length}: ${todos[currentTodoIndex]}`);
-    // 这里返回continue会直接回agent节点，而不是通过advance_todo
-    // 但注意：工具调用后会通过advance_todo更新索引
+    // 返回continue会先推进索引，再执行下一个任务
     return "continue";
   }
 
@@ -124,14 +123,15 @@ const workflow = new StateGraph(StateAnnotation)
     toolNode: "toolExecutor",        // 安全工具 -> 直接交给 toolExecutor 执行并记录
     human_review: "human_review", // 节点名保持一致
     summarize: "summarize",
-    continue: "inject_project_tree", // 重要修复：执行下一个任务前先经过inject_project_tree节点
+    continue: "advance_todo", // 关键修复：任务完成后先推进索引，再执行下一个任务
     [END]: END,
   })
-  // 敏感工具 -> 人工审批 -> 工具 -> 索引推进 -> agent
+  // 敏感工具 -> 人工审批 -> 工具 -> 索引推进 -> inject_project_tree -> agent
   .addEdge("human_review", "toolNode")
   .addEdge("toolNode", "toolExecutor")
   .addEdge("toolExecutor", "advance_todo")
-  .addEdge("advance_todo", "agent")
+  .addEdge("advance_todo", "inject_project_tree") // 重要修复：索引推进后经过inject_project_tree再到agent
+  .addEdge("inject_project_tree", "agent")
   // 总结只是压缩上下文，不结束，继续agent
   .addEdge("summarize", "agent");
 
