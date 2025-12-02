@@ -511,85 +511,117 @@ function parseTodos(planText: string): string[] {
 }
 
 export async function plannerNode(state: AgentState): Promise<Partial<AgentState>> {
+  // 兼容旧的 plannerNode：改为顺序调用新的 project & task planner
+  const projectRes = await projectPlannerNode(state as AgentState);
+  const intermediateState = { ...state, ...projectRes } as AgentState;
+  const taskRes = await taskPlannerNode(intermediateState as AgentState);
+
+  return {
+    ...projectRes,
+    ...taskRes,
+  };
+}
+
+// ---------- 新增：projectPlannerNode ----------
+export async function projectPlannerNode(state: AgentState): Promise<Partial<AgentState>> {
   const lastUser = state.messages[state.messages.length - 1];
   const projectRoot = state.projectRoot ?? "C:\\projects\\playground";
 
-  const system = new SystemMessage(
-    [
-      "你是一个给“代码智能体”做项目规划的助手。",
-      "规划结果会直接驱动自动写代码/改文件的过程，所以你只能输出对编码有直接帮助的内容，禁止写代码。",
-      "",
-      "【重要约束】",
-      "1. 只允许输出以下三个部分，且顺序必须一致：",
-      "   ## 技术栈与项目概要",
-      "   ## 项目目录结构",
-      "   ## 开发 ToDo 列表",
-      "",
-      "2. 各部分要求：",
-      "   - 技术栈与项目概要：",
-      "     - 选择主要技术栈（例如：React + TypeScript + Vite + Tailwind CSS）。",
-      "     - 用 2~5 句解释选择理由和整体实现思路，聚焦“代码结构与工程化方式”，而不是商业或产品层面。",
-      "   - 项目目录结构：",
-      "     - 用 tree 风格列出核心目录和关键文件，路径相对项目根目录（例如：src/pages/Home.tsx）。",
-      "     - 不要展开到每一个小组件，只列对整体结构重要的部分（入口、路由、页面、核心组件、状态管理、配置等）。",
-      "   - 开发 ToDo 列表：",
-      "     - ToDo 必须从 0 到 1 全面覆盖项目落地的主要编码环节，不得跳过关键步骤。",
-      "     - 必须至少包含以下阶段的任务：",
-      "       1）项目初始化与依赖安装：创建工程、基础目录和配置文件（如 main 入口、配置文件、包管理配置等）。",
-      "       2）基础工程配置：路由、布局框架、全局样式/主题、状态管理/数据流、环境变量读取等。", 
-      "       3）核心业务页面/模块：按页面或模块拆分任务，实现主要交互与界面。", 
-      "       4）共用组件与工具：表单组件、列表组件、布局组件、工具函数、API 封装等。", 
-      "       5）数据层与 Mock：本地 JSON 数据、mock 接口或简单的数据访问封装，让页面可运行、可查看效果。", 
-      "       6）基本错误处理与加载状态：为空数据、接口失败、加载中等场景提供基础处理。", 
-      "       7）基础测试（如果技术栈包含测试框架）：至少包含一类关键模块或函数的简单测试任务。",
-      "     - 列出 15~40 条“可以通过代码和文件操作完成”的开发任务，覆盖以上各阶段。",
-      "     - 每条 ToDo 必须尽量指明涉及的文件/目录（相对路径），如果需要新建文件或目录，要在任务中写明“新建”。",
-      "     - 每条 ToDo 粒度应大致能在 1~3 次智能体调用内完成，不要把多个不相关的功能塞进一条任务，也不要写成过于抽象的大任务。",
-      "     - 禁止出现空泛的步骤，例如仅写“初始化项目”，应具体到要创建或修改哪些关键文件/配置。",
-      "",
-      "3. 明确禁止输出：",
-      "   - “可能的扩展功能”、未来规划、商业计划、监控、安全、CI/CD、大量功能脑暴等与当前核心 Demo 无关的内容。",
-      "   - 部署计划、日志分析、A/B 测试、PWA、安全加固等非本次 Demo 必须内容。",
-      "",
-      "4. ToDo 形态示例（✅ 可以）：",
-      "   - `在 src/pages/PostList.tsx 中实现文章列表页，使用 PostCard 组件展示 data/posts.json 中的所有文章。`",
-      "   - `在 src/utils/posts.ts 中实现 getPostById(id: string) 函数，从 data/posts.json 中读取文章详情。`",
-      "   - `在 src/main.tsx 中挂载根组件 <App />，并配置基础路由结构（/、/posts/:id）。`",
-      "   - `新建 src/api/client.ts，封装一个基于 fetch 的 request 函数，用于后续数据请求。`",
-      "   反例（❌ 禁止）：",
-      "   - `完成文章详情页原型设计。`（这是设计工作，不是具体代码实现。）",
-      "   - `优化用户体验。`（过于抽象，不可直接执行。）",
-      "   - `完成整体业务逻辑开发。`（任务过大且不具体。）",
-      "",
-      "5. 输出要求：",
-      "   - 严格使用这三个标题和顺序，不要添加其他 `##` 标题。",
-      "   - 内容应以“能直接驱动从 0 开始搭建并跑通一个可用 Demo”为目标，允许为此适度增加 ToDo 条数，但不要写成长篇说明文或功能脑暴。",
-      "   - 不要输出任何工具名称、版本号、ASCII 艺术或品牌营销类信息；如需举例，仅用于说明技术栈类型，不做宣传描述。",
+  const system = new SystemMessage({
+    content: [
+      "你是架构规划助手，只负责决定技术栈和项目结构，不负责拆细粒度 ToDo。",
+      "你需要输出：",
+      "1) 技术栈与整体思路（简短）",
+      "2) 目标项目目录结构（tree）",
+      "3) 为了让这套技术栈能跑起来，必须完成的工程级前置步骤（列表）",
+      "注意：不要写执行过程，不要说‘我现在要做什么’，只写静态规划。",
     ].join("\n"),
-  );
+  });
 
-
-  const user = new HumanMessage(
-    [
-      `项目根目录（由系统指定，仅作为参考前提，不需要修改）：\`${projectRoot}\``,
+  const user = new HumanMessage({
+    content: [
+      `项目根目录（由系统传入）：\`${projectRoot}\``,
       "",
-      "下面是用户的需求，请基于此进行项目规划和 ToDo 拆解：",
-      "",
+      "用户需求：",
       "--------------------------------",
       lastUser?.content ?? "",
       "--------------------------------",
     ].join("\n"),
-  );
+  });
 
   const res = await baseModel.invoke([system, user]);
-  const fullPlanText = (res as AIMessage).content as string;
-  const todos = parseTodos(fullPlanText);
+  const planText = (res as AIMessage).content as string;
+
+  // 从 planText 中尝试抽取工程级初始化步骤（简单实现：查找标题下的列表）
+  const projectInitSteps: string[] = [];
+  const lines = planText.split("\n");
+  let capture = false;
+  for (const line of lines) {
+    const t = line.trim();
+    if (/^###?\s*工程|初始化|前置步骤/i.test(t)) {
+      capture = true;
+      continue;
+    }
+    if (capture) {
+      if (/^#{1,3}\s/.test(t)) break; // 下一个标题停止
+      if (/^[-•\d.]/.test(t)) projectInitSteps.push(t.replace(/^[-•\d.\s]+/, "").trim());
+    }
+  }
+
+  // 尝试从 planText 中抽取技术栈一句话摘要（取第一段简短说明）
+  const techStackSummary = (planText.split("\n\n")[0] || "").slice(0, 400);
 
   return {
     messages: [...state.messages, res],
-    codeContext: fullPlanText,
+    // 新增字段使用 any 断言以兼容当前 StateType 定义
+    ...( { projectPlanText: planText, techStackSummary, projectInitSteps } as unknown as Record<string, unknown> ),
+    projectProfile: {
+      ...(state.projectProfile ?? {}),
+      primaryLanguage: state.projectProfile?.primaryLanguage ?? "TypeScript",
+      detectedLanguages: state.projectProfile?.detectedLanguages ?? ["TypeScript", "JavaScript"],
+      testFrameworkHint: state.projectProfile?.testFrameworkHint ?? "Vitest",
+    },
+  } as Partial<AgentState>;
+}
+
+// ---------- 新增：taskPlannerNode ----------
+export async function taskPlannerNode(state: AgentState): Promise<Partial<AgentState>> {
+  const lastUser = state.messages[state.messages.length - 1];
+  const _s = (state as unknown) as Record<string, unknown>;
+  const projectPlan = (_s.projectPlanText as string) ?? "";
+  const initSteps = (_s.projectInitSteps as string[]) ?? [];
+
+  const system = new SystemMessage({
+    content: [
+      "你是开发任务拆解助手，负责生成可以直接执行的 ToDo 列表。",
+      "必须严格基于上游给出的项目规划（技术栈、结构、初始化步骤），不能自说自话。",
+      "前几条 ToDo 必须覆盖 projectInitSteps，后续再拆具体的页面/组件/数据任务。",
+      "只输出 ToDo 列表本身，每行一条，不要加标题或解释。",
+    ].join("\n"),
+  });
+
+  const user = new HumanMessage({
+    content: [
+      "===== 项目规划文档 =====",
+      projectPlan,
+      "",
+      "===== 上游提供的工程级前置步骤 projectInitSteps =====",
+      initSteps.map((s: string, i: number) => `${i + 1}. ${s}`).join("\n"),
+      "",
+      "===== 用户原始需求 =====",
+      lastUser?.content ?? "",
+      "",
+      "请根据以上信息生成完整的开发 ToDo 列表。",
+    ].join("\n"),
+  });
+
+  const res = await baseModel.invoke([system, user]);
+  const todos = parseTodos((res as AIMessage).content as string);
+
+  return {
+    messages: [...state.messages, res],
     todos,
     currentTodoIndex: 0,
-    currentTask: "根据项目规划逐条完成开发 ToDo 列表中的任务",
+    currentTask: "根据 ToDo 列表逐条完成开发任务",
   };
 }

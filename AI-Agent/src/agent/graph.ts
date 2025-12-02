@@ -9,7 +9,8 @@ import {
   toolExecutor,
   agent,
   humanReviewNode,
-  plannerNode,   // ✅ 先规划 todolist 的节点
+  projectPlannerNode,
+  taskPlannerNode,
 } from "./nodes.ts";
 
 const checkpointer = new MemorySaver();
@@ -65,7 +66,8 @@ async function routeAgentOutput(state: AgentState) {
 }
 
 const workflow = new StateGraph(StateAnnotation)
-  .addNode("planner", plannerNode)                // ✅ 先规划，生成 todolist 等
+  .addNode("project_planner", projectPlannerNode)   // 架构规划，生成 projectPlanText & projectInitSteps
+  .addNode("task_planner", taskPlannerNode)         // 根据项目规划生成 todos
   .addNode("summarize", summarizeConversation)
   .addNode("agent", agent)
   .addNode("toolNode", toolNode)
@@ -75,9 +77,10 @@ const workflow = new StateGraph(StateAnnotation)
     // 简单桥接：返回 partial state 来推进索引
     return { currentTodoIndex: (state.currentTodoIndex ?? 0) + 1 };
   })
-  // 入口：先跑 planner，一次性写好 todos / 项目信息等
-  .addEdge(START, "planner")
-  .addEdge("planner", "agent")
+  // 入口：先跑 project_planner -> task_planner -> agent
+  .addEdge(START, "project_planner")
+  .addEdge("project_planner", "task_planner")
+  .addEdge("task_planner", "agent")
   // agent 输出后，根据路由决定下一步
   .addConditionalEdges("agent", routeAgentOutput, {
     toolNode: "toolExecutor",        // 安全工具 -> 直接交给 toolExecutor 执行并记录
