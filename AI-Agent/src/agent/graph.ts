@@ -133,7 +133,7 @@ const workflow = new StateGraph(StateAnnotation)
     
     console.log(`[advance_todo] 索引更新: ${currentIndex} -> ${newIndex}, todos长度: ${todosLength}`);
     return { currentTodoIndex: newIndex };
-  }),
+  })
   .addNode("inject_project_tree", wrapNode("inject_project_tree", injectProjectTreeNode))
   // 入口：先跑 project_planner -> task_planner -> inject_project_tree -> agent
   .addEdge(START, "project_planner")
