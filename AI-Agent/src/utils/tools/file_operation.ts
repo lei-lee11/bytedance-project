@@ -1,8 +1,8 @@
 import * as z from "zod";
 import { tool } from "@langchain/core/tools";
 import type { RunnableConfig } from "@langchain/core/runnables";
-import fs from "fs/promises";
-import path from "path";
+import * as fs from "fs/promises";
+import * as path from "path";
 
 interface FileReadResult {
   success: boolean;

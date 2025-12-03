@@ -1,8 +1,8 @@
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 import { spawn, ChildProcess } from "child_process";
-import path from "path";
-import fs from "fs/promises";
+import * as path from "path";
+import * as fs from "fs/promises";
 
 const toErrorMessage = (err: unknown): string =>
   err instanceof Error ? err.message : String(err);

@@ -15,9 +15,9 @@ import {
   buildCodeWithTestPlanPrompt,
   buildUnitTestOnlyPrompt,
   buildReviewPrompt,
-} from "./prompt.ts";
-import { AgentState } from "./state.ts";
-import { baseModel, modelWithTools } from "../config/model.ts";
+} from "./prompt.ts`";
+import { AgentState } from "./state";
+import { baseModel, modelWithTools } from "../config/model";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 // import { Command } from "@langchain/langgraph";
 import { z } from "zod";
@@ -1057,16 +1057,4 @@ export function parseTodos(planText: string): string[] {
   return todos;
 }
 
-export async function plannerNode(
-  state: AgentState,
-): Promise<Partial<AgentState>> {
-  // 兼容旧的 plannerNode：改为顺序调用新的 project & task planner
-  const projectRes = await projectPlannerNode(state as AgentState);
-  const intermediateState = { ...state, ...projectRes } as AgentState;
-  const taskRes = await taskPlannerNode(intermediateState as AgentState);
 
-  return {
-    ...projectRes,
-    ...taskRes,
-  };
-}

@@ -1,8 +1,8 @@
 import { StateGraph, START, END } from "@langchain/langgraph";
 import { AIMessage, SystemMessage } from "@langchain/core/messages";
-import { StateAnnotation, AgentState } from "./state.ts";
+import { StateAnnotation, AgentState } from "./state";
 import { MemorySaver } from "@langchain/langgraph";
-import { SENSITIVE_TOOLS } from "../utils/tools/index.ts";
+import { SENSITIVE_TOOLS } from "../utils/tools/index";
 import {
   summarizeConversation,
   toolNode,
@@ -14,7 +14,7 @@ import {
   intentNode,
   plannerNode,
   updateRecentActionsNode,
-} from "./nodes.ts";
+} from "./nodes";
 
 const checkpointer = new MemorySaver();
 
@@ -211,7 +211,7 @@ async function routeAgentOutput(state: AgentState) {
 
 const workflow = new StateGraph(StateAnnotation)
   .addNode("processReferencedFiles", processReferencedFiles)
-  .addNode("intentNode", wrapNode("intentNode", intentNode)) // 任务意图分类，只跑一次
+  .addNode("intent", wrapNode("intent", intentNode)) // 任务意图分类，只跑一次
   .addNode("planner", wrapNode("planner", plannerNode)) // 总调度规划器，根据mode分发
   .addNode("summarize", wrapNode("summarize", summarizeConversation))
   .addNode("agent", wrapNode("agent", agent))
@@ -237,10 +237,10 @@ const workflow = new StateGraph(StateAnnotation)
     "inject_project_tree",
     wrapNode("inject_project_tree", injectProjectTreeNode),
   )
-  // 入口：先跑 processReferencedFiles -> intentNode（任务分类）-> planner（总调度）-> inject_project_tree -> agent
+  // 入口：先跑 processReferencedFiles -> intent（任务分类）-> planner（总调度）-> inject_project_tree -> agent
   .addEdge(START, "processReferencedFiles")
-  .addEdge("processReferencedFiles", "intentNode")
-  .addEdge("intentNode", "planner")
+  .addEdge("processReferencedFiles", "intent")
+  .addEdge("intent", "planner")
   .addEdge("planner", "inject_project_tree")
   .addEdge("inject_project_tree", "agent")
   // agent 输出后，根据路由决定下一步
