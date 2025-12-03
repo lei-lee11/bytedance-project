@@ -3,6 +3,7 @@ import { project_tree_tool } from './project_tree.js'
 import { testTools } from './testRunner.js'
 import { backgroundProcessTools } from './backgroundProcess.js'
 import { codeEditTools } from './code_edit.js'
+import { codeSearchTools } from './code_search.js'
 
 const tools = [
   // 文件读写类工具（敏感）
@@ -15,7 +16,10 @@ const tools = [
   ...backgroundProcessTools,
   // 代码编辑类工具（包含 edit_code_snippet）
   ...codeEditTools,
+  // 代码搜索工具
+  ...codeSearchTools
 ];
+
 export const SENSITIVE_TOOLS = [
   "manualTestRunnerTool",
   "autoTestRunnerTool",
