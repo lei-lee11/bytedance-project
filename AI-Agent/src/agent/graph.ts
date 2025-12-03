@@ -13,6 +13,7 @@ import {
   injectProjectTreeNode,
   intentNode,
   plannerNode,
+  updateRecentActionsNode,
 } from "./nodes.ts";
 
 const checkpointer = new MemorySaver();
@@ -216,6 +217,7 @@ const workflow = new StateGraph(StateAnnotation)
   .addNode("agent", wrapNode("agent", agent))
   .addNode("toolNode", toolNode)
   .addNode("toolExecutor", wrapNode("toolExecutor", toolExecutor))
+  .addNode("update_recent_actions", wrapNode("update_recent_actions", updateRecentActionsNode)) // 新增：更新最近操作记录
   .addNode("human_review", wrapNode("human_review", humanReviewNode))
   .addNode("advance_todo", async (state) => {
     // 安全地推进索引：确保索引不会超过todos数组长度
@@ -250,10 +252,11 @@ const workflow = new StateGraph(StateAnnotation)
     agent: "agent", // 明确添加agent到agent的自连接，用于工具执行后继续当前任务
     [END]: END,
   })
-  // 敏感工具 -> 人工审批 -> 工具 -> 回到agent继续处理当前任务
+  // 敏感工具 -> 人工审批 -> 工具 -> 工具执行器 -> 更新操作记录 -> 回到agent继续处理当前任务
   .addEdge("human_review", "toolNode")
   .addEdge("toolNode", "toolExecutor")
-  .addEdge("toolExecutor", "agent") // 关键修复：工具执行后回到agent继续处理当前任务，不推进索引
+  .addEdge("toolExecutor", "update_recent_actions") // 新增：工具执行后更新最近操作记录
+  .addEdge("update_recent_actions", "agent") // 关键修复：更新操作记录后回到agent继续处理当前任务，不推进索引
   // 只有真正完成任务时才通过continue路由推进索引
   .addConditionalEdges(
     "advance_todo",
