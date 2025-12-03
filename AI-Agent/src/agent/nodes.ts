@@ -833,9 +833,23 @@ export const agent = async (state: AgentState) => {
     currentTodoIndex = 0,
     currentTask,
     projectTreeText,
+    mode = "feature",
   } = state;
 
   const parts: string[] = [];
+
+  // 模式说明
+  parts.push(
+    [
+      "你是一个命令行开发助手。",
+      `当前任务模式: ${mode}`,
+      mode === "bug_fix"
+        ? "- 你的首要目标是修复错误 / 让测试通过。优先使用 run_command 运行测试，分析错误，再定位和修改代码。"
+        : mode === "new_project"
+        ? "- 你的首要目标是按照规划创建和初始化项目结构，然后逐步实现功能。"
+        : "- 你的首要目标是在现有项目中实现新的功能或重构，保持原有行为不出错。",
+    ].join("\n"),
+  );
 
   // 1) 项目结构
   if (projectTreeText && projectTreeText.trim()) {
