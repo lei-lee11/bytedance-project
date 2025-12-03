@@ -1,12 +1,12 @@
 // src/components/TextInput/InputArea.tsx
-import React, { FC, useState, useMemo, useEffect } from "react";
+import { FC, useState, useMemo, useEffect } from "react";
 import { Box, Text } from "ink";
 import { THEME } from "../../utils/theme.ts";
 import { TextArea } from "./TextArea.tsx";
 import { SuggestionBox } from "../SuggestionBox.tsx";
 import { AVAILABLE_COMMANDS } from "../../utils/commands.ts";
-// 假设你的 mock 函数在这个位置，请根据实际路径修改
-import { mockSearchFiles } from "../../mock/fileApi.ts";
+// 使用真实的文件系统 API
+import { searchFiles, FileSystemItem } from "../../utils/fileSystemApi.ts";
 
 interface SessionMetadata {
   thread_id: string;
@@ -24,6 +24,13 @@ interface InputAreaProps {
   sessions?: Session[];
 }
 
+interface SuggestionItem {
+  value: string;
+  description: string;
+  type: string;
+  isDirectory?: boolean;
+}
+
 export const InputArea: FC<InputAreaProps> = ({
   onSubmit,
   isLoading,
@@ -33,6 +40,9 @@ export const InputArea: FC<InputAreaProps> = ({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [cursorTrigger, setCursorTrigger] = useState(0);
   const [isSelectionUpdate, setIsSelectionUpdate] = useState(false);
+  
+  // 新增：缓存文件搜索结果
+  const [fileItems, setFileItems] = useState<FileSystemItem[]>([]);
 
   // --- 1. 核心建议逻辑 ---
   const suggestions = useMemo(() => {
@@ -50,14 +60,13 @@ export const InputArea: FC<InputAreaProps> = ({
     // -------------------------------------------------------
     const fileMatch = currentLine.match(/(?:^|\s)@([^\s]*)$/);
     if (fileMatch) {
-      const searchStr = fileMatch[1]; // 获取 @ 后面的字符
-      const files = mockSearchFiles(searchStr); // 🔎 调用你的搜索函数
-
-      if (files.length > 0) {
-        return files.map((f) => ({
-          value: `@${f}`, // 这是选中后要填入的内容
-          description: "File Context",
-          type: "file", // 标记类型，方便后续处理
+      // 使用缓存的文件列表生成建议
+      if (fileItems.length > 0) {
+        return fileItems.map((item) => ({
+          value: `@${item.path}${item.isDirectory ? '/' : ''}`, // 目录后加斜杠
+          description: item.isDirectory ? '📁 Directory' : '📄 File',
+          type: "file",
+          isDirectory: item.isDirectory, // 标记是否为目录
         }));
       }
     }
@@ -110,9 +119,33 @@ export const InputArea: FC<InputAreaProps> = ({
     }
 
     return [];
-  }, [query, sessions, isSelectionUpdate]);
+  }, [query, fileItems, sessions, isSelectionUpdate]);
 
   const showSuggestions = suggestions.length > 0;
+
+  // --- 异步搜索文件 ---
+  useEffect(() => {
+    const lines = query.split("\n");
+    const currentLine = lines[lines.length - 1] || "";
+    const fileMatch = currentLine.match(/(?:^|\s)@([^\s]*)$/);
+    
+    if (fileMatch) {
+      const searchStr = fileMatch[1];
+      
+      // 异步搜索文件
+      searchFiles(searchStr)
+        .then(items => {
+          setFileItems(items);
+        })
+        .catch(error => {
+          console.error('Failed to search files:', error);
+          setFileItems([]);
+        });
+    } else {
+      // 不在文件搜索模式，清空缓存
+      setFileItems([]);
+    }
+  }, [query]);
 
   // --- 2. 状态重置 ---
   useEffect(() => {
@@ -121,7 +154,8 @@ export const InputArea: FC<InputAreaProps> = ({
       const timer = setTimeout(() => setIsSelectionUpdate(false), 100);
       return () => clearTimeout(timer);
     }
-  }, [query]);
+    return undefined;
+  }, [query, isSelectionUpdate]);
 
   const handleSubmit = (value: string) => {
     if (!value.trim()) return;
@@ -134,17 +168,18 @@ export const InputArea: FC<InputAreaProps> = ({
     if (!showSuggestions) return false;
     if (dir === "up") {
       setSelectedIndex((prev) => Math.max(0, prev - 1));
+      return true;
     } else {
       setSelectedIndex((prev) => Math.min(suggestions.length - 1, prev + 1));
+      return true;
     }
-    return true;
   };
 
   // --- 3. 核心修改：处理选中逻辑 ---
   const handleSuggestionSelect = (): boolean => {
     if (!showSuggestions) return false;
 
-    const selectedItem = suggestions[selectedIndex];
+    const selectedItem = suggestions[selectedIndex] as SuggestionItem;
     if (selectedItem) {
       setIsSelectionUpdate(true);
 
@@ -160,8 +195,11 @@ export const InputArea: FC<InputAreaProps> = ({
         if (lastAtIndex !== -1) {
           // 保留 @ 之前的内容
           const prefix = currentLine.substring(0, lastAtIndex);
-          // 组合新行：前缀 + @完整文件名 + 空格
-          const newLine = prefix + selectedItem.value + " ";
+          
+          // 如果是目录，不加空格，让用户继续浏览
+          // 如果是文件，加空格表示补全完成
+          const suffix = selectedItem.isDirectory ? '' : ' ';
+          const newLine = prefix + selectedItem.value + suffix;
 
           // 如果有多行，我们需要把最后一行替换掉，保留之前的行
           lines[lines.length - 1] = newLine;

@@ -4,6 +4,8 @@ import fs from 'fs/promises';
 import path from 'path';
 import { backupManager } from './backup_manager.js';
 import { diffGenerator } from './diff_generator.js';
+import { syntaxChecker } from './syntax_checker.js';
+import { grep_search_ripgrep } from './code_search.js';
 
 /**
  * 查找代码在文件中的精确匹配
@@ -208,23 +210,34 @@ const previewCodeChange = new DynamicStructuredTool({
 });
 
 /**
- * 工具3: 查找代码上下文
+ * 工具3: 查找代码上下文（增强版）
  */
 const findCodeContext = new DynamicStructuredTool({
   name: "find_code_context",
   description:
     "在文件中查找代码模式，显示匹配的代码和周围的上下文。" +
+    "支持简单字符串匹配和正则表达式搜索。" +
     "用于在编辑前确定要修改的确切代码位置。",
   schema: z.object({
     file_path: z.string().describe("文件路径"),
-    search_pattern: z.string().describe("要查找的代码模式或关键字"),
+    search_pattern: z.string().describe("要查找的代码模式或关键字（支持正则表达式）"),
     context_lines: z
       .number()
       .optional()
       .default(5)
       .describe("显示的上下文行数（默认5行）"),
+    use_regex: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe("是否使用正则表达式搜索（默认false，使用简单字符串匹配）"),
+    case_sensitive: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe("是否区分大小写（仅在 use_regex=true 时生效，默认false）"),
   }),
-  func: async ({ file_path, search_pattern, context_lines = 5 }) => {
+  func: async ({ file_path, search_pattern, context_lines = 5, use_regex = false, case_sensitive = false }) => {
     try {
       const resolvedPath = path.resolve(file_path);
       const content = await fs.readFile(resolvedPath, 'utf-8');
@@ -232,18 +245,56 @@ const findCodeContext = new DynamicStructuredTool({
       
       const matches: Array<{ lineNumber: number; line: string }> = [];
       
-      // 查找包含模式的所有行
-      lines.forEach((line, index) => {
-        if (line.includes(search_pattern)) {
-          matches.push({ lineNumber: index + 1, line });
+      if (use_regex) {
+        // 使用高性能 ripgrep 进行正则表达式搜索
+        try {
+          const searchResult = await grep_search_ripgrep.invoke({
+            pattern: search_pattern,
+            dir_path: path.dirname(resolvedPath),
+            include: path.basename(resolvedPath),
+            case_sensitive: case_sensitive,
+            max_results: 100,
+          });
+          
+          // 解析 ripgrep 结果
+          const rgMatches = searchResult.match(/L(\d+):\s*(.+)/g);
+          if (rgMatches) {
+            rgMatches.forEach((match) => {
+              const lineMatch = match.match(/L(\d+):\s*(.+)/);
+              if (lineMatch) {
+                matches.push({
+                  lineNumber: parseInt(lineMatch[1], 10),
+                  line: lineMatch[2],
+                });
+              }
+            });
+          }
+        } catch (error) {
+          // 如果 ripgrep 失败，回退到基本正则搜索
+          const regex = new RegExp(search_pattern, case_sensitive ? 'g' : 'gi');
+          lines.forEach((line, index) => {
+            if (regex.test(line)) {
+              matches.push({ lineNumber: index + 1, line });
+            }
+          });
         }
-      });
-      
-      if (matches.length === 0) {
-        return `❌ 未找到包含 "${search_pattern}" 的代码`;
+      } else {
+        // 简单字符串匹配（原有逻辑，保持向后兼容）
+        lines.forEach((line, index) => {
+          if (line.includes(search_pattern)) {
+            matches.push({ lineNumber: index + 1, line });
+          }
+        });
       }
       
-      let result = `🔍 找到 ${matches.length} 处匹配:\n\n`;
+      if (matches.length === 0) {
+        const searchType = use_regex ? "正则表达式" : "字符串";
+        return `❌ 未找到匹配 ${searchType} "${search_pattern}" 的代码\n\n` +
+               `💡 提示: ${use_regex ? '尝试简化正则表达式' : '尝试使用 use_regex=true 进行正则搜索'}`;
+      }
+      
+      const searchType = use_regex ? "正则" : "字符串";
+      let result = `🔍 找到 ${matches.length} 处匹配 (${searchType}搜索):\n\n`;
       
       matches.forEach((match, index) => {
         result += `匹配 ${index + 1} (第 ${match.lineNumber} 行):\n`;
@@ -265,8 +316,9 @@ const findCodeContext = new DynamicStructuredTool({
       result += `\n💡 提示: 复制完整的代码片段（包括缩进）用于 edit_code_snippet 的 old_code 参数`;
       
       return result;
-    } catch (error: any) {
-      return `❌ 查找失败: ${error.message}`;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      return `❌ 查找失败: ${message}`;
     }
   },
 });
