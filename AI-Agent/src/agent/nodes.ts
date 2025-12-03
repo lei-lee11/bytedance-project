@@ -189,7 +189,8 @@ export const injectProjectTreeNode = async (state: AgentState) => {
 
 // 生成代码，根据用户意图和上下文
 export const generateCode = async (state: AgentState) => {
-  const { messages, currentTask, programmingLanguage, codeContext } = state;
+  const { messages, currentTask, codeContext } = state;
+  const programmingLanguage = state.projectProfile?.primaryLanguage || "";
 
   const promptText = buildCodeWithTestPlanPrompt({
     currentTask,
@@ -216,10 +217,10 @@ export const generateTests = async (state: AgentState) => {
   const {
     messages,
     currentTask,
-    programmingLanguage,
     codeContext,
     testPlanText, // 我们在 StateAnnotation 里刚加的那个字段
   } = state;
+  const programmingLanguage = state.projectProfile?.primaryLanguage || "";
 
   // 1. 确定“待测代码”
   let codeUnderTest = (codeContext || "").trim();
@@ -259,7 +260,8 @@ export const generateTests = async (state: AgentState) => {
 
 // 审查代码，判断是否符合要求
 export const reviewCode = async (state: AgentState) => {
-  const { messages, currentTask, programmingLanguage, retryCount } = state;
+  const { messages, currentTask, retryCount } = state;
+  const programmingLanguage = state.projectProfile?.primaryLanguage || "";
 
   const lastAIMessage = [...messages]
     .reverse()

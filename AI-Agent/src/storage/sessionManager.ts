@@ -9,7 +9,8 @@ import {
     StorageConfig,
     SaveOptions,
     QueryOptions,
-    SessionState
+    AgentState,
+    ISessionManager
 } from './types.js';
 import { BaseMessage } from '@langchain/core/messages';
 import { join } from 'path'; // 需要导入 path 模块
@@ -18,7 +19,7 @@ import { join } from 'path'; // 需要导入 path 模块
  * 会话管理器
  * 负责管理所有会话的生命周期
  */
-export class SessionManager {
+export class SessionManager implements ISessionManager {
     private fileManager: FileManager;
     private config: StorageConfig;
 
@@ -28,7 +29,6 @@ export class SessionManager {
             basePath: process.env.AI_AGENT_STORAGE_PATH || join(process.cwd(), 'ai-agent-storage'),
             maxHistoryRecords: 1000,
             maxCheckpoints: 50,
-            autoBackup: true,
             ...config
         };
 
@@ -126,15 +126,15 @@ export class SessionManager {
     }
 
     /**
-     * 保存检查点
+     * 保存检查点（支持完整的 AgentState）
      */
     async saveCheckpoint(
         threadId: string,
-        state: SessionState,
+        state: AgentState,
         checkpointId?: string
     ): Promise<string> {
         const now = Date.now();
-        const cpId = checkpointId || `ckpt_${String(now).slice(-6)}`;
+        const cpId = checkpointId || `agent_ckpt_${String(now).slice(-6)}`;
 
         // 获取当前检查点数量
         const existingCheckpoints = await this.fileManager.readCheckpoints(threadId);
@@ -194,15 +194,19 @@ export class SessionManager {
 
         await this.fileManager.appendHistory(threadId, historyRecord);
 
-        // 更新消息计数
+        // 更新消息计数 - 修复逻辑，避免重复计数
         const metadata = await this.fileManager.readMetadata(threadId);
         if (metadata) {
-            const messageCount = ['user_message', 'ai_response'].includes(event.event_type)
-                ? metadata.message_count + 1
-                : metadata.message_count;
+            // 获取所有历史记录，计算实际的用户消息和AI回复数量
+            const allHistory = await this.fileManager.readHistory(threadId);
+            const userMessages = allHistory.filter(record => record.event_type === 'user_message');
+            const aiMessages = allHistory.filter(record => record.event_type === 'ai_response');
+
+            // 基于实际的历史记录数更新计数，而不是简单+1
+            const actualMessageCount = userMessages.length + aiMessages.length;
 
             await this.updateSessionMetadata(threadId, {
-                message_count: messageCount, // 修复拼写错误，使用正确的变量名
+                message_count: actualMessageCount,
                 updated_at: Date.now()
             });
         }
@@ -254,7 +258,7 @@ export class SessionManager {
      * 列出所有会话
      */
     async listSessions(options: {
-        status?: 'active' | 'archived' | 'completed';
+        status?: 'active' | 'archived';
         limit?: number;
         offset?: number;
     } = {}): Promise<SessionListResult> {

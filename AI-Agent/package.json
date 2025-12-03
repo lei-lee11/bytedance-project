@@ -35,7 +35,7 @@
     "@langchain/openai": "^1.1.2",
     "ahooks": "^3.9.6",
     "diff": "^8.0.2",
-    "dotenv": "^17.2.3",
+    "dotenv": "^16.4.5",
     "ink": "^6.5.1",
     "ink-big-text": "^2.0.0",
     "ink-gradient": "^3.0.0",
@@ -44,12 +44,12 @@
     "ink-text-area": "^0.0.1",
     "ink-text-input": "^6.0.0",
     "langchain": "^1.0.6",
-    "marked": "^17.0.1",
+    "marked": "^15.0.0",
     "marked-terminal": "^7.3.0",
     "proper-lockfile": "^4.1.2",
     "react": "^19.2.0",
     "uuid": "^9.0.0",
-    "zod": "^4.1.12"
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.1.0",

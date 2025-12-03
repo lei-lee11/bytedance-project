@@ -113,8 +113,8 @@ export function validateSessionMetadata(metadata: Partial<SessionMetadata>): {
     errors.push('updated_at is invalid');
   }
 
-  if (metadata.status && !['active', 'archived', 'completed'].includes(metadata.status)) {
-    errors.push('status must be one of: active, archived, completed');
+  if (metadata.status && !['active', 'archived'].includes(metadata.status)) {
+    errors.push('status must be one of: active, archived');
   }
 
   if (metadata.message_count !== undefined && metadata.message_count < 0) {

@@ -1,18 +1,13 @@
-import { SessionManager } from './sessionManager.js';
-import {
-  HistoryRecord,
-  QueryOptions,
-  ToolCallRecord,
-} from './types.js';
+import { ISessionManager, HistoryRecord, QueryOptions, ToolCallRecord } from './types.js';
 
 /**
  * 历史记录管理器
  * 提供专门的历史记录查询和分析功能
  */
 export class HistoryManager {
-  private sessionManager: SessionManager;
+  private sessionManager: ISessionManager;
 
-  constructor(sessionManager: SessionManager) {
+  constructor(sessionManager: ISessionManager) {
     this.sessionManager = sessionManager;
   }
 
@@ -154,6 +149,7 @@ export class HistoryManager {
     timeSpan: { start: number; end: number; duration: number };
     lastActivity: number;
     primaryTools: Array<{ name: string; count: number }>;
+    messageFrequency: number;
   }> {
     const [userMessages, aiResponses, toolCalls, systemOps] = await Promise.all([
       this.getUserMessages(threadId),
@@ -173,7 +169,8 @@ export class HistoryManager {
         systemOperations: 0,
         timeSpan: { start: 0, end: 0, duration: 0 },
         lastActivity: 0,
-        primaryTools: []
+        primaryTools: [],
+        messageFrequency: 0
       };
     }
 
@@ -194,6 +191,10 @@ export class HistoryManager {
       .sort((a, b) => b.count - a.count)
       .slice(0, 5);
 
+    // 计算消息频率（条/小时）
+    const durationHours = (endTime - startTime) / (1000 * 60 * 60);
+    const messageFrequency = durationHours > 0 ? allHistory.length / durationHours : 0;
+
     return {
       totalMessages: allHistory.length,
       userMessages: userMessages.length,
@@ -206,7 +207,8 @@ export class HistoryManager {
         duration: endTime - startTime
       },
       lastActivity,
-      primaryTools
+      primaryTools,
+      messageFrequency: Math.round(messageFrequency * 100) / 100 // 保留两位小数
     };
   }
 

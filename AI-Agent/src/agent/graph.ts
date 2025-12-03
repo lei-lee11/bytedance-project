@@ -1,7 +1,7 @@
 import { StateGraph, START, END } from "@langchain/langgraph";
 import { AIMessage, SystemMessage } from "@langchain/core/messages";
 import { StateAnnotation, AgentState } from "./state.ts";
-import { MemorySaver } from "@langchain/langgraph";
+import { initializeCheckpointer } from "../config/checkpointer.js";
 import { SENSITIVE_TOOLS } from "../utils/tools/index.ts";
 import {
   summarizeConversation,
@@ -15,7 +15,8 @@ import {
   injectProjectTreeNode,
 } from "./nodes.ts";
 
-const checkpointer = new MemorySaver();
+// 延迟初始化的检查点保存器
+let checkpointer: any; // 将动态初始化为 LangGraphStorageAdapter
 
 // wrapNode: 在每个节点执行前，把当前节点名写入 state.messages（SystemMessage）并在控制台打印，
 // 这样在运行智能体时可以观察当前执行的是哪个节点。
