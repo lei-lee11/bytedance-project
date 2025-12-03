@@ -18,7 +18,9 @@ export class FileManager {
   private basePath: string;
 
   constructor(config?: Partial<StorageConfig>) {
-    this.basePath = config?.basePath || path.join(homedir(), '.ai-agent');
+    // 优先从环境变量读取存储路径
+    const envPath = process.env.AI_AGENT_STORAGE_PATH;
+    this.basePath = config?.basePath || envPath || path.join(homedir(), '.ai-agent');
   }
 
   /**

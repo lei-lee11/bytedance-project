@@ -1,8 +1,8 @@
 import { StateGraph, START, END } from "@langchain/langgraph";
 import { AIMessage, SystemMessage } from "@langchain/core/messages";
-import { StateAnnotation, AgentState } from "./state";
+import { StateAnnotation, AgentState } from "./state.ts";
 import { MemorySaver } from "@langchain/langgraph";
-import { SENSITIVE_TOOLS } from "../utils/tools/index";
+import { SENSITIVE_TOOLS } from "../utils/tools/index.ts";
 import {
   summarizeConversation,
   toolNode,
@@ -14,7 +14,7 @@ import {
   intentNode,
   plannerNode,
   updateRecentActionsNode,
-} from "./nodes";
+} from "./nodes.ts";
 
 const checkpointer = new MemorySaver();
 
@@ -245,7 +245,7 @@ const workflow = new StateGraph(StateAnnotation)
   .addEdge("inject_project_tree", "agent")
   // agent 输出后，根据路由决定下一步
   .addConditionalEdges("agent", routeAgentOutput, {
-    toolNode: "toolExecutor", // 安全工具 -> 直接交给 toolExecutor 执行并记录
+    toolNode: "toolNode", // 安全工具 -> 先交给 toolNode 执行
     human_review: "human_review", // 节点名保持一致
     summarize: "summarize",
     continue: "advance_todo", // 关键修复：任务完成后先推进索引，再执行下一个任务
