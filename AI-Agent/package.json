@@ -26,6 +26,7 @@
     "lint:langgraph-json": "node scripts/checkLanggraphPaths.js"
   },
   "dependencies": {
+    "@joshua.litt/get-ripgrep": "^0.0.3",
     "@langchain/community": "^1.0.5",
     "@langchain/core": "^1.0.6",
     "@langchain/deepseek": "^1.0.2",
@@ -36,6 +37,7 @@
     "ahooks": "^3.9.6",
     "diff": "^8.0.2",
     "dotenv": "^16.4.5",
+    "glob": "^13.0.0",
     "ink": "^6.5.1",
     "ink-big-text": "^2.0.0",
     "ink-gradient": "^3.0.0",
