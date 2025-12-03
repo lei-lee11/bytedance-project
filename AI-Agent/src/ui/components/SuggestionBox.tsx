@@ -6,6 +6,7 @@ import { THEME } from "../utils/theme.ts";
 interface Command {
   value: string;
   description: string;
+  isDirectory?: boolean;
 }
 
 interface SuggestionBoxProps {
@@ -30,6 +31,8 @@ export const SuggestionBox: React.FC<SuggestionBoxProps> = ({
     >
       {items.map((item, index) => {
         const isSelected = index === selectedIndex;
+        // 为目录添加视觉提示
+        const arrow = item.isDirectory ? ' →' : '';
         return (
           <Box key={item.value}>
             <Text
@@ -40,7 +43,7 @@ export const SuggestionBox: React.FC<SuggestionBoxProps> = ({
               {isSelected ? " > " : "   "}
               {item.value.padEnd(10)}
               <Text color={isSelected ? THEME.bg : THEME.textDim} italic>
-                {item.description}
+                {item.description}{arrow}
               </Text>
             </Text>
           </Box>
