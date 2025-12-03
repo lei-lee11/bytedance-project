@@ -10,10 +10,9 @@ import {
   agent,
   humanReviewNode,
   processReferencedFiles,
-  projectPlannerNode,
-  taskPlannerNode,
   injectProjectTreeNode,
   intentNode,
+  plannerNode,
 } from "./nodes.ts";
 
 const checkpointer = new MemorySaver();
@@ -212,8 +211,7 @@ async function routeAgentOutput(state: AgentState) {
 const workflow = new StateGraph(StateAnnotation)
   .addNode("processReferencedFiles", processReferencedFiles)
   .addNode("intentNode", wrapNode("intentNode", intentNode)) // 任务意图分类，只跑一次
-  .addNode("project_planner", wrapNode("project_planner", projectPlannerNode)) // 架构规划，生成 projectPlanText & projectInitSteps
-  .addNode("task_planner", wrapNode("task_planner", taskPlannerNode)) // 根据项目规划生成 todos
+  .addNode("planner", wrapNode("planner", plannerNode)) // 总调度规划器，根据mode分发
   .addNode("summarize", wrapNode("summarize", summarizeConversation))
   .addNode("agent", wrapNode("agent", agent))
   .addNode("toolNode", toolNode)
@@ -237,12 +235,11 @@ const workflow = new StateGraph(StateAnnotation)
     "inject_project_tree",
     wrapNode("inject_project_tree", injectProjectTreeNode),
   )
-  // 入口：先跑 processReferencedFiles -> intentNode（任务分类）-> project_planner -> task_planner -> inject_project_tree -> agent
+  // 入口：先跑 processReferencedFiles -> intentNode（任务分类）-> planner（总调度）-> inject_project_tree -> agent
   .addEdge(START, "processReferencedFiles")
   .addEdge("processReferencedFiles", "intentNode")
-  .addEdge("intentNode", "project_planner")
-  .addEdge("project_planner", "task_planner")
-  .addEdge("task_planner", "inject_project_tree")
+  .addEdge("intentNode", "planner")
+  .addEdge("planner", "inject_project_tree")
   .addEdge("inject_project_tree", "agent")
   // agent 输出后，根据路由决定下一步
   .addConditionalEdges("agent", routeAgentOutput, {

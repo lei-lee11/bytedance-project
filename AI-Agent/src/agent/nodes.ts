@@ -138,9 +138,175 @@ const ProjectPlanSchema = z.object({
 const TaskPlanSchema = z.object({
   todos: z.array(z.string()),
 });
+
+// Bug 修复规划 schema
+const BugFixPlanSchema = z.object({
+  todos: z.array(z.string().describe("一个详细任务描述")),
+});
+
+// 代码变更规划 schema
+const CodeChangePlanSchema = z.object({
+  todos: z.array(z.string()),
+});
+
 import { attachFilesToContext } from "../utils/tools/fileContext.js";
 
-//解析用户输入，提取用户意图
+// plannerNode 总调度：根据 mode 分发到不同的规划器
+export async function plannerNode(
+  state: AgentState,
+): Promise<Partial<AgentState>> {
+  const mode = state.mode ?? "feature"; // 没识别出来默认按 feature
+
+  if (mode === "new_project") {
+    // 继续用原来的两段式规划
+    const projectRes = await projectPlannerNode(state as AgentState);
+    const intermediateState = { ...state, ...projectRes } as AgentState;
+    const taskRes = await taskPlannerNode(intermediateState as AgentState);
+    return {
+      ...projectRes,
+      ...taskRes,
+    };
+  }
+
+  if (mode === "bug_fix") {
+    // 新的 bug 修复型 planner
+    return bugFixTaskPlannerNode(state);
+  }
+
+  // feature / refactor 共用一个
+  return codeChangeTaskPlannerNode(state);
+}
+
+// bugFixTaskPlannerNode：专门为“修 bug”拆 todo
+export async function bugFixTaskPlannerNode(
+  state: AgentState,
+): Promise<Partial<AgentState>> {
+  const lastUser = state.messages[state.messages.length - 1];
+  const projectRoot = state.projectRoot || ".";
+  const projectTree = state.projectTreeText ?? "";
+  const testPlan = state.testPlanText ?? "";
+
+  const system = new SystemMessage({
+    content: [
+      "你是 Bug 修复任务拆解助手，负责生成详细、可直接执行的 ToDo 列表。",
+      "此次任务是 bug_fix（修复错误），目标通常是：让报错消失 / 测试通过。",
+      "",
+      "要求：",
+      "1. ToDo 列表必须体现典型的 Debug 流程，例如：",
+      "   - 理解报错信息 / 失败测试",
+      "   - 定位相关文件和函数",
+      "   - 阅读和分析相关代码",
+      "   - 修改代码并解释修改思路",
+      "   - 运行测试命令（例如 pytest），验证是否修复",
+      "2. 每个 ToDo 文本应包含：",
+      "   - 具体目标（比如：找出导致 test_xxx 失败的原因）",
+      "   - 建议使用的工具或操作（例如：read_file, run_command）",
+      "   - 验收标准（例如：指定测试用例通过、不再出现某个错误信息）。",
+      "3. ToDo 数量建议 3~8 条之间，粒度适中。",
+      "4. 只输出结构化字段 todos（string[]），不要输出其他内容。",
+    ].join("\n"),
+  });
+
+  const user = new HumanMessage({
+    content: [
+      `项目根目录: ${projectRoot}`,
+      "",
+      "===== 项目结构（可能已截断） =====",
+      projectTree,
+      "",
+      "===== 测试计划 / 已知测试信息 =====",
+      testPlan || "(无)",
+      "",
+      "===== 用户原始需求（包含错误描述或失败测试） =====",
+      String(lastUser?.content ?? ""),
+      "",
+      "请根据以上信息生成 bug 修复的 ToDo 列表。",
+    ].join("\n"),
+  });
+
+  const structured = baseModel.withStructuredOutput(BugFixPlanSchema);
+  const res = await structured.invoke([system, user]);
+  const todos = Array.isArray(res.todos) ? res.todos : [];
+
+  const todosText = todos.length
+    ? `Bug Fix ToDos:\n${todos
+        .map((t: string, i: number) => `${i + 1}. ${t}`)
+        .join("\n")}`
+    : "";
+
+  return {
+    messages: [
+      ...state.messages,
+      new SystemMessage({ content: todosText || "(无 ToDo)" }),
+    ],
+    todos,
+    currentTodoIndex: 0,
+    currentTask: todos[0] ?? "按照 ToDo 列表逐条修复 bug",
+  };
+}
+
+// codeChangeTaskPlannerNode：给“改代码 / 写项目功能”用
+export async function codeChangeTaskPlannerNode(
+  state: AgentState,
+): Promise<Partial<AgentState>> {
+  const lastUser = state.messages[state.messages.length - 1];
+  const projectPlan = state.projectPlanText ?? "";      // 有可能是空（比如老项目）
+  const initSteps = state.projectInitSteps ?? [];
+  const projectTree = state.projectTreeText ?? "";
+
+  const system = new SystemMessage({
+    content: [
+      "你是开发任务拆解助手，负责为功能开发 / 重构生成详细 ToDo 列表。",
+      "本次任务类型为 feature/refactor（在现有项目上增加功能或重构）。",
+      "",
+      "要求：",
+      "1. 任务描述必须详细具体，包含：目标、主要操作步骤、验收标准、预期输出。",
+      "2. ToDo 应体现在现有项目结构基础上工作，充分利用已有模块。",
+      "3. 如果提供了 projectInitSteps，则前几条任务需要完成这些前置步骤（如安装依赖、基础配置），之后进入具体功能开发。",
+      "4. 只输出结构化字段 todos（string[]）。",
+    ].join("\n"),
+  });
+
+  const user = new HumanMessage({
+    content: [
+      "===== 项目规划文档（如有） =====",
+      projectPlan || "(无)",
+      "",
+      "===== 工程级前置步骤 projectInitSteps（如有） =====",
+      initSteps.length
+        ? initSteps.map((s, i) => `${i + 1}. ${s}`).join("\n")
+        : "(无)",
+      "",
+      "===== 项目结构（可能已截断） =====",
+      projectTree || "(未提供)",
+      "",
+      "===== 用户原始需求 =====",
+      String(lastUser?.content ?? ""),
+      "",
+      "请生成一个有序的 ToDo 列表，数量建议在 4~10 条之间。",
+    ].join("\n"),
+  });
+
+  const structured = baseModel.withStructuredOutput(CodeChangePlanSchema);
+  const res = await structured.invoke([system, user]);
+  const todos = Array.isArray(res.todos) ? res.todos : [];
+
+  const todosText = todos.length
+    ? `Dev ToDos:\n${todos.map((t, i) => `${i + 1}. ${t}`).join("\n")}`
+    : "";
+
+  return {
+    messages: [
+      ...state.messages,
+      new SystemMessage({ content: todosText || "(无 ToDo)" }),
+    ],
+    todos,
+    currentTodoIndex: 0,
+    currentTask: todos[0] ?? "根据 ToDo 列表逐条完成开发任务",
+  };
+}
+
+// 解析用户输入，提取用户意图
 export const parseUserInput = async (state: AgentState) => {
   const historyText = state.messages
     .map(
