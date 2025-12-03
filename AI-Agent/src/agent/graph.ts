@@ -286,7 +286,20 @@ const workflow = new StateGraph(StateAnnotation)
   // 总结只是压缩上下文，不结束，继续agent
   .addEdge("summarize", "agent");
 
-export const graph = workflow.compile({
-  checkpointer,
-  interruptBefore: ["human_review"],
-});
+export let graph: any;
+export async function initializeGraph() {
+  if (graph) {
+    return graph;
+  }
+  if (!checkpointer) {
+    checkpointer = await initializeCheckpointer();
+  }
+
+  graph = workflow.compile({
+    checkpointer: checkpointer,
+    interruptBefore: ["human_review"],
+  });
+  return graph;
+}
+
+// 延迟编译图，等待检查点初始化

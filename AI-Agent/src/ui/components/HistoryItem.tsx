@@ -1,67 +1,51 @@
 import React from "react";
 import { Box, Text } from "ink";
-import { StatusBadge } from "../App.tsx"; // 保持你的引入路径
-import { MarkdownText } from "../App.tsx"; // 保持你的引入路径
+import { StatusBadge } from "../App.tsx";
+import { MarkdownText } from "../App.tsx";
 import { THEME } from "../utils/theme.ts";
+import { UIMessage } from "../utils/adapter.ts";
 
 interface HistoryItemProps {
-  item: {
-    id: string;
-    role: string;
-    content: string;
-    reasoning?: string;
-  };
+  item: UIMessage; // 直接使用定义好的接口
 }
 
 export const HistoryItem: React.FC<HistoryItemProps> = ({ item }) => {
-  // 1. 【过滤】直接拦截并隐藏不需要的框架日志
-  if (item.content.includes("Turn completed")) {
+  // 1. 【过滤】过滤掉不需要显示的中间状态（如果 Storage 里存了 Checkpoint 描述等）
+  // 这里的 "Turn completed" 通常是 Checkpoint 的描述，不应该作为消息显示
+  if (item.content === "Turn completed") {
     return null;
   }
 
-  // 2. 【美化】工具调用/执行日志
-  const isToolLog =
-    item.content.includes("Executed") ||
-    item.content.includes("Approved execution");
-
-  if (isToolLog) {
-    // 提取工具名
-    const toolName = item.content.split(" ").pop() || "tool";
-    const isSuccess = item.content.includes("Executed");
+  // 2. 【工具日志】直接通过 role 判断
+  if (item.role === "tool") {
+    const isSuccess = item.isSuccess !== false; // 默认为 true
+    const toolName = item.toolName || "tool";
 
     return (
       <Box marginLeft={4} marginY={0}>
-        {/* 左侧图标/前缀：使用暗色 (Dim) */}
         <Text color={THEME.textDim}>
-          {isSuccess ? "✔ " : "⚙️ "}
-          {isSuccess ? "已执行: " : "调用中: "}
+          {isSuccess ? "✔ " : "✖ "}
+          {isSuccess ? "Executed: " : "Failed: "}
         </Text>
-
-        {/* 工具名称：成功用抹茶绿，进行中用系统橙或淡紫 */}
-        <Text color={isSuccess ? THEME.tool : THEME.system} bold>
+        <Text color={isSuccess ? THEME.tool : "red"} bold>
           {toolName}
         </Text>
       </Box>
     );
   }
 
-  // 3. 【常规】普通消息渲染
-
-  // 预先决定颜色，避免 JSX 里写太复杂的逻辑
-  let textColor = THEME.textUser; // 默认用户颜色
+  // 3. 【常规消息】
   let roleColor = THEME.userAccent;
 
   if (item.role === "ai") {
-    textColor = THEME.textAi; // 淡灰
-    roleColor = THEME.aiAccent; // 柔和蓝
+    roleColor = THEME.aiAccent;
   } else if (item.role === "system") {
-    textColor = THEME.system; // 橙黄
     roleColor = THEME.system;
   }
 
   return (
     <Box flexDirection="row" marginBottom={1}>
-      {/* 左侧头像/状态徽章 */}
+      {/* 左侧徽章 */}
       <Box width={2} marginRight={1}>
         <Text color={roleColor}>
           <StatusBadge role={item.role} />
@@ -73,16 +57,28 @@ export const HistoryItem: React.FC<HistoryItemProps> = ({ item }) => {
         {item.role === "system" ? (
           <Text color={THEME.system}>{item.content}</Text>
         ) : item.role === "ai" ? (
-          /* Case B: AI 回复 */
+          /* Case B: AI 回复 (包含推理过程) */
           <Box flexDirection="column">
-            {/* AI 正文内容 */}
-            {/* 注意：MarkdownText 内部最好也能接收 color 属性，或者由父级控制 */}
+            {/* 推理部分 (如果存在且还没折叠) */}
+            {item.reasoning && (
+              <Box
+                borderStyle="single"
+                borderColor="gray"
+                paddingX={1}
+                marginBottom={1}
+              >
+                <Text color="gray" italic>
+                  {item.reasoning}
+                </Text>
+              </Box>
+            )}
+            {/* 正文 */}
             <Box>
               <MarkdownText content={item.content} />
             </Box>
           </Box>
         ) : (
-          /* Case C: 用户消息 - 使用白烟色 */
+          /* Case C: 用户消息 */
           <Text color={THEME.textUser} bold>
             {item.content}
           </Text>

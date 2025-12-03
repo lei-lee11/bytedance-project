@@ -1,20 +1,21 @@
-import React, { FC, useState, useEffect, useMemo } from "react";
+import React, { FC, useState, useEffect, useMemo, useRef } from "react";
 import { Box, Text, Static, useApp } from "ink";
 import { useRequest } from "ahooks";
 import { marked } from "marked";
 import TerminalRenderer from "marked-terminal";
 import { HumanMessage, ToolMessage } from "@langchain/core/messages";
-import { graph } from "../agent/graph.js";
+// 🔥 修改 1: 引入 initializeGraph
+import { graph, initializeGraph } from "../agent/graph.js";
 import { Header } from "./components/Header.tsx";
 import { MinimalThinking } from "./components/MinimalThinking.tsx";
 import { ApprovalCard } from "./components/ApprovalCard.tsx";
 import { HistoryItem } from "./components/HistoryItem.tsx";
 import { InputArea } from "./components/TextInput/InputArea.tsx";
-import { storage } from "./test.js"; //测试用
 import { useSessionManager } from "./hooks/useSessionManager.ts";
 import { useMessageProcessor } from "./hooks/useMessageProcessor.ts";
 import { StatusBar } from "./components/StatusBar.tsx";
 
+// ... marked 配置保持不变 ...
 marked.setOptions({
   renderer: new TerminalRenderer({
     code: (code: any) => code,
@@ -27,7 +28,7 @@ marked.setOptions({
 type ToolState = { name: string; input: string };
 type PendingToolState = { name: string; args: any };
 
-// Markdown 组件
+// ... MarkdownText 和 StatusBadge 组件保持不变 ...
 export const MarkdownText = ({ content }: { content: string }) => {
   const formattedText = useMemo(() => {
     try {
@@ -39,7 +40,6 @@ export const MarkdownText = ({ content }: { content: string }) => {
   return <Text>{formattedText}</Text>;
 };
 
-// 状态徽章组件
 export const StatusBadge = ({ role }: { role: string }) => {
   switch (role) {
     case "user":
@@ -56,17 +56,24 @@ export const StatusBadge = ({ role }: { role: string }) => {
 export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
   const { exit } = useApp();
   const [showLogo, setShowLogo] = useState(true);
+
+  // 🔥 修改 2: 添加 Graph 初始化状态
+  const [isGraphReady, setIsGraphReady] = useState(false);
+  const [graphError, setGraphError] = useState<string | null>(null);
+
   const {
     activeSessionId: threadId,
     currentHistory: history,
-    isLoading,
+    isLoading: isSessionLoading, // 重命名一下以免混淆
     sessionList,
     createNewSession,
     switchSession,
-    addMessage, // 统一的消息添加入口（自动处理 UI + 持久化）
+    addMessage,
+    storage,
   } = useSessionManager();
-  const { processInput, isProcessing: isContextProcessing } =
-    useMessageProcessor();
+
+  const { processInput } = useMessageProcessor();
+
   // 实时状态
   const [currentAIContent, setCurrentAIContent] = useState("");
   const [currentReasoning, setCurrentReasoning] = useState("");
@@ -74,9 +81,21 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
   const [pendingTool, setPendingTool] = useState<PendingToolState | null>(null);
   const [awaitingApproval, setAwaitingApproval] = useState(false);
 
-  // 如果传入了 initialMessage，我们强制开启一个新会话，而不是加载旧的
-  // 使用 ref 确保初始消息只处理一次，防止重复创建会话
-  const hasProcessedInitial = React.useRef(false);
+  const hasProcessedInitial = useRef(false);
+
+  // 🔥 修改 3: 初始化 Graph 的 Effect
+  useEffect(() => {
+    const init = async () => {
+      try {
+        await initializeGraph(); // 等待图编译并赋值给全局 graph 变量
+        setIsGraphReady(true);
+      } catch (err: any) {
+        console.error("Graph initialization failed:", err);
+        setGraphError(err.message || "Unknown graph error");
+      }
+    };
+    void init();
+  }, []);
 
   // --- 发送消息逻辑 ---
   const { run: sendMessage, loading: isThinking } = useRequest(
@@ -85,7 +104,15 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
       isResume = false,
       pendingFiles: string[] = [],
     ) => {
-      if (!threadId) return;
+      // 检查 Graph 是否就绪
+      if (!isGraphReady || !graph) {
+        await addMessage(
+          "system",
+          "Error: Agent graph is not initialized yet.",
+        );
+        return;
+      }
+      if (!threadId || !storage) return;
 
       setCurrentAIContent("");
       setCurrentReasoning("");
@@ -105,6 +132,7 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
               messages: [new HumanMessage(text!)],
               pendingFilePaths: pendingFiles,
             };
+
         const stream = await graph.streamEvents(inputs, config);
 
         if (!stream) return;
@@ -113,15 +141,13 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
         let fullReasoning = "";
 
         for await (const event of stream) {
-          // --- Chat Model Stream 处理 ---
+          // ... stream 处理逻辑保持不变 ...
           if (event.event === "on_chat_model_stream") {
             const chunk = event.data.chunk;
-            let reasoningChunk = "";
-            if (chunk.additional_kwargs?.reasoning_content) {
-              reasoningChunk = chunk.additional_kwargs.reasoning_content;
-            } else if ((chunk as any).reasoning_content) {
-              reasoningChunk = (chunk as any).reasoning_content;
-            }
+            const reasoningChunk =
+              chunk.additional_kwargs?.reasoning_content ||
+              (chunk as any).reasoning_content ||
+              "";
 
             if (reasoningChunk) {
               fullReasoning += reasoningChunk;
@@ -132,50 +158,65 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
               fullContent += chunk.content;
               setCurrentAIContent(fullContent);
             }
-          }
-          // --- 工具状态处理 ---
-          else if (event.event === "on_tool_start") {
+          } else if (event.event === "on_tool_start") {
             setCurrentTool({
               name: event.name,
               input: JSON.stringify(event.data.input),
             });
-          }
-          // --- 工具结束处理 ---
-          else if (event.event === "on_tool_end") {
+          } else if (event.event === "on_tool_end") {
             setCurrentTool(null);
-            await addMessage("tool", `Executed ${event.name}`, undefined);
+            await addMessage(
+              "tool",
+              event.data.output || "Executed",
+              undefined,
+              { tool_name: event.name },
+            );
           }
         }
 
-        // --- AI 回复完成处理 ---
+        // --- AI 回复完成 ---
         if (fullContent || fullReasoning) {
-          // [核心修改] 使用 Hook 添加 AI 消息
           await addMessage("ai", fullContent, fullReasoning);
           setCurrentAIContent("");
           setCurrentReasoning("");
           setCurrentTool(null);
-          // 更新会话元数据
+
           await storage.sessions.updateSessionMetadata(threadId, {
             status: "active",
           });
         }
 
-        // --- 保存 Checkpoint  ---
-        // Checkpoint 是 Agent 运行状态，不属于简单的“聊天记录”，所以直接调 storage
+        // --- 保存 Checkpoint (🔥 修复的部分) ---
         const snapshot = await graph.getState(config);
-        await storage.checkpoints.createCheckpoint(
-          threadId,
-          {
-            messages: snapshot.values.messages,
-            currentTask: fullContent.slice(0, 50),
-            programmingLanguage:
-              snapshot.values.programmingLanguage || "unknown",
-          },
-          {
-            description: "Turn completed",
-            stepType: "agent",
-          },
-        );
+        const currentValues = snapshot.values as any; // 强制转换以便解构
+
+        const updatePayload = {
+          ...currentValues, // 继承 retryCount, projectTreeInjected 等所有字段
+          messages: currentValues.messages,
+          currentTask:
+            fullContent.slice(0, 50) ||
+            currentValues.currentTask ||
+            "Processing",
+          // ❌ 已彻底移除 programmingLanguage
+        };
+
+        if (storage.checkpoints) {
+          await storage.checkpoints.saveCheckpoint(
+            threadId,
+            updatePayload,
+            undefined, // 第三个参数是 checkpointId，传 undefined
+          );
+        } else {
+          // 兼容旧接口逻辑
+          await (storage.sessions as any).saveCheckpoint(
+            threadId,
+            updatePayload,
+            {
+              description: "Turn completed",
+              stepType: "agent",
+            },
+          );
+        }
 
         // --- 处理中断 (Approval) ---
         if (snapshot.next.length > 0) {
@@ -190,129 +231,112 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
           }
         }
       } catch (e: any) {
+        console.error(e);
         const errMsg = `Error: ${e.message}`;
         await addMessage("system", errMsg);
       }
     },
     { manual: true },
   );
+
+  // --- 初始化 Effect ---
   useEffect(() => {
-    // 如果还在加载 storage，或者没有初始消息，或者已经处理过了，直接返回
-    if (isLoading || !initialMessage || hasProcessedInitial.current) {
+    // 🔥 修改 4: 增加 !isGraphReady 的判断
+    if (
+      isSessionLoading ||
+      !isGraphReady ||
+      !initialMessage ||
+      hasProcessedInitial.current
+    ) {
       return;
     }
 
     const handleInitialFlow = async () => {
-      // 标记为已处理
       hasProcessedInitial.current = true;
-
       try {
-        // 强制创建一个新会话 (不管 Hook 默认加载了什么旧会话)
         await createNewSession();
-
-        // 稍微延迟一点点以确保状态更新，然后发送消息
         setTimeout(() => {
           sendMessage(initialMessage);
         }, 100);
       } catch (e) {
-        console.error("Failed to handle initial message:", e);
+        console.error("Initial flow error:", e);
       }
     };
 
     void handleInitialFlow();
+  }, [
+    isSessionLoading,
+    isGraphReady,
+    initialMessage,
+    createNewSession,
+    sendMessage,
+  ]);
 
-    // 依赖项：只要 isLoading 变化（变为 false）或者 initialMessage 变化，就检查是否需要执行
-  }, [isLoading, initialMessage, createNewSession, sendMessage]);
-
-  // --- 处理用户输入 (集成指令系统) ---
+  // --- 处理用户提交 ---
   const { run: handleUserSubmit } = useRequest(
     async (val: string) => {
+      // ... 这里的逻辑基本保持不变 ...
       const input = val.trim();
       if (!input) return;
       if (showLogo) setShowLogo(false);
 
-      const processedResult = await processInput(input);
-      // 第三步：存入数据库 & 更新 UI
-      await addMessage(
-        "user",
-        processedResult.content, // 这里是包含了文件内容的完整 Prompt
-        undefined,
-        {
-          ...processedResult.metadata,
-          pendingFilePaths: processedResult.pendingFilePaths, // 添加 pendingFilePaths 到 metadata
-        },
-      );
-      // ---  指令处理逻辑 ---
-
-      // 1. 新建会话
       if (input === "/new") {
         await createNewSession();
-        // 可以在 UI 上显示一条临时的系统提示（不存库）
         return;
       }
-
-      // 2. 列出会话
-      if (input === "/list") {
-        const report = sessionList
-          .map((s) => {
-            // 或者直接显示 s.metadata.thread_id (最安全)
-            const displayId = s.metadata.thread_id;
-
-            return `ID: ${displayId} | 📝 ${s.metadata.title || "Untitled"} | 💬 ${s.metadata.message_count}`;
-          })
-          .join("\n");
-        await addMessage(
-          "system",
-          `
-=== Session List ===
-${report}
-Use /switch <id> to change session.`,
-        );
-        return;
-      }
-
-      // 3. 切换会话
-      if (input.startsWith("/switch ")) {
-        const targetId = input.replace("/switch ", "").trim();
-        const realId = await switchSession(targetId);
-        if (realId) {
-          // 切换成功，history 会自动更新，这里可以加个提示
-        } else {
-          await addMessage("system", `❌ Session not found: ${targetId}`);
-        }
-        return;
-      }
-
-      // 4. 退出
       if (input === "/exit") {
         exit();
         return;
       }
-
-      // --- 正常对话逻辑 ---
+      if (input.startsWith("/switch ")) {
+        const targetId = input.replace("/switch ", "").trim();
+        const realId = await switchSession(targetId);
+        if (!realId)
+          await addMessage("system", `❌ Session not found: ${targetId}`);
+        return;
+      }
+      if (input === "/list") {
+        const report = sessionList
+          .map((s) => {
+            const id = s.metadata?.thread_id || "unknown";
+            const title = s.metadata?.title || "Untitled";
+            const count = s.metadata?.message_count || 0;
+            return `ID: ${id} | 📝 ${title} | 💬 ${count}`;
+          })
+          .join("\n");
+        await addMessage(
+          "system",
+          `=== Session List ===
+${report}
+Use /switch <id> to change.`,
+        );
+        return;
+      }
 
       if (!threadId) return;
 
       try {
-        //  使用 Hook 添加用户消息
-        await addMessage("user", input);
-
-        // 触发 AI
+        const processedResult = await processInput(input);
+        await addMessage("user", processedResult.content, undefined, {
+          ...processedResult.metadata,
+          pendingFilePaths: processedResult.pendingFilePaths,
+        });
         sendMessage(
           processedResult.content,
-          false, // isResume
+          false,
           processedResult.pendingFilePaths,
         );
-      } catch (error) {
-        console.error("Failed to process user message:", error);
-        await addMessage("system", "Error: Failed to process message.");
+      } catch (error: any) {
+        console.error("User submit error:", error);
+        await addMessage("system", `Error: ${error.message}`);
       }
     },
     { manual: true },
   );
 
-  // --- 处理工具审批 ---
+  // --- 处理审批 ---
   const { run: handleApprovalSelect } = useRequest(
+    // ... 这里的逻辑保持不变 ...
     async (value: "approve" | "reject") => {
       if (!pendingTool || !threadId) return;
 
@@ -322,13 +346,11 @@ Use /switch <id> to change session.`,
           ? `🛠️ Approved execution of: ${pendingTool.name}`
           : `🚫 Rejected execution of: ${pendingTool.name}`;
 
-        //  使用 Hook 记录审批结果
         await addMessage("system", content);
 
         if (isApproved) {
           sendMessage(null, true);
         } else {
-          // LangGraph 状态更新逻辑 (保持不变)
           const config = { configurable: { thread_id: threadId } };
           const snapshot = await graph.getState(config);
           const lastMsg =
@@ -354,19 +376,34 @@ Use /switch <id> to change session.`,
     },
     { manual: true },
   );
+
   const stableSessionList = useMemo(() => {
     return sessionList;
-  }, [JSON.stringify(sessionList.map((s) => s.metadata.thread_id))]);
-  // 加载中状态
-  if (isLoading) {
+  }, [JSON.stringify(sessionList.map((s) => s.metadata?.thread_id))]);
+
+  // 🔥 修改 5: 更新 Loading 界面
+  // 如果 Session 在加载，或者 Graph 还没初始化完成
+  if (isSessionLoading || !isGraphReady) {
     return (
       <Box padding={1}>
-        <Text color="green">⟳ Loading persistent session...</Text>
+        <Text color="green">
+          {isSessionLoading
+            ? "⟳ Loading Session..."
+            : "⟳ Initializing Agent Graph..."}
+        </Text>
       </Box>
     );
   }
 
-  // 如果没有 threadId (极少数情况，比如列表为空且创建失败)，显示错误
+  // 如果 Graph 初始化失败
+  if (graphError) {
+    return (
+      <Box padding={1}>
+        <Text color="red">❌ Failed to start Agent: {graphError}</Text>
+      </Box>
+    );
+  }
+
   if (!threadId) {
     return (
       <Box padding={1}>
@@ -379,14 +416,12 @@ Use /switch <id> to change session.`,
     <Box flexDirection="column" height="100%">
       {showLogo && <Header />}
 
-      {/*  聊天主区域 */}
+      {/* 消息列表区域 */}
       <Box flexDirection="column" flexGrow={1} paddingX={1}>
-        {/* 历史记录 */}
         <Static items={history}>
           {(item) => <HistoryItem key={item.id} item={item} />}
         </Static>
 
-        {/* 实时流式输出区域 */}
         {(isThinking ||
           currentAIContent ||
           currentReasoning ||
@@ -410,12 +445,11 @@ Use /switch <id> to change session.`,
         )}
       </Box>
 
-      {/*   底部固定区域 */}
+      {/* 底部输入框区域 */}
       <Box flexDirection="column" marginTop={1}>
         <StatusBar threadId={threadId} />
 
         <Box paddingX={1} paddingBottom={1}>
-          {/* 这里的 InputArea 现在包含了 SuggestionBox */}
           {awaitingApproval ? (
             <ApprovalCard tool={pendingTool!} onSelect={handleApprovalSelect} />
           ) : (
