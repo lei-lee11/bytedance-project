@@ -58,6 +58,51 @@ export const updateRecentActionsNode = (state: AgentState): Partial<AgentState> 
   };
 };
 
+// 任务意图分类节点：判断本次任务的类型
+export const TaskIntentSchema = z.object({
+  mode: z.enum(["new_project", "bug_fix", "feature", "refactor"]),
+  reason: z.string().describe("Why this mode was chosen, in Chinese."),
+});
+
+export async function intentNode(
+  state: AgentState,
+): Promise<Partial<AgentState>> {
+  const lastUser = state.messages[state.messages.length - 1];
+
+  const system = new SystemMessage({
+    content: [
+      "你是任务意图分类助手。",
+      "根据用户的自然语言说明，判断这次任务属于哪一类：",
+      "- new_project: 从零新建一个项目 / 脚手架 / 目录结构 / 选 tech stack",
+      "- bug_fix: 主要目标是修复错误、让测试通过、解决报错",
+      "- feature: 在已有项目上增加新功能、接口、模块、页面等",
+      "- refactor: 调整已有代码结构、优化设计、重构（功能基本不变）",
+      "",
+      "只输出 mode 和简短 reason，不要输出其他自由文本。",
+    ].join("\n"),
+  });
+
+  const user = new HumanMessage({
+    content: [
+      "用户当前的完整需求如下：",
+      "----------------------",
+      String(lastUser?.content ?? ""),
+      "----------------------",
+      "",
+      "请根据以上内容选择最合适的 mode。",
+    ].join("\n"),
+  });
+
+  const structured = baseModel.withStructuredOutput(TaskIntentSchema);
+  const res = await structured.invoke([system, user]);
+
+  return {
+    mode: res.mode,
+    // 把 reason 写进 summary 里，让后面 agent 也能看到
+    summary: `${state.summary ?? ""}\n[Intent] 模式 = ${res.mode}，原因：${res.reason}`,
+  };
+}
+
 // 从模型生成的文本中尝试提取测试计划（简单实现：查找 '### Step 2' 后的内容）
 function extractTestPlan(text: unknown): string | undefined {
   if (typeof text !== "string") return undefined;

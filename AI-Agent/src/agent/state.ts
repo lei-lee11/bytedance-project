@@ -1,6 +1,9 @@
 import { BaseMessage, BaseMessageLike } from "@langchain/core/messages";
 import { Annotation, messagesStateReducer } from "@langchain/langgraph";
 
+// 任务模式类型
+export type AgentMode = "new_project" | "bug_fix" | "feature" | "refactor";
+
 export const StateAnnotation = Annotation.Root({
   messages: Annotation<BaseMessage[], BaseMessageLike[]>({
     reducer: messagesStateReducer,
@@ -26,6 +29,12 @@ export const StateAnnotation = Annotation.Root({
 
   // 代码审核结果
   reviewResult: Annotation<string>(),
+
+  // 任务模式：判断本次任务类型
+  mode: Annotation<AgentMode | undefined>({
+    value: (_prev, next) => next,
+    default: () => undefined,
+  }),
 
   // 项目根目录（一般在调用 graph 时初始化，比如 process.cwd()）
   projectRoot: Annotation<string>({
@@ -123,6 +132,7 @@ export function createAgentState(
     programmingLanguage: "TypeScript",
     retryCount: 0,
     reviewResult: "",
+    mode: undefined,
     projectRoot: overrides.projectRoot ?? "C:\\projects\\playground",
     projectTreeMessageId: "",
     projectTreeInjected: false,
