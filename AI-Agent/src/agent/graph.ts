@@ -1,5 +1,5 @@
 import { StateGraph, START, END } from "@langchain/langgraph";
-import { AIMessage, SystemMessage } from "@langchain/core/messages";
+import { AIMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 import { StateAnnotation, AgentState } from "./state.ts";
 import { MemorySaver } from "@langchain/langgraph";
 import { SENSITIVE_TOOLS } from "../utils/tools/index.ts";
@@ -17,6 +17,17 @@ import {
 
 const checkpointer = new MemorySaver();
 
+// 辅助函数：将消息内容转换为字符串，处理字符串或数组类型
+function getContentAsString(content: string | Array<{ type: string; text?: string; [key: string]: unknown }>): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content.map(item => item.text || "").join(" ");
+  }
+  return "";
+}
+
 // wrapNode: 在每个节点执行前，把当前节点名写入 state.messages（SystemMessage）并在控制台打印，
 // 这样在运行智能体时可以观察当前执行的是哪个节点。
 function wrapNode<T extends (...args: unknown[]) => unknown>(
@@ -24,18 +35,22 @@ function wrapNode<T extends (...args: unknown[]) => unknown>(
   fn: T,
 ): T {
   const wrapper = (async (state: AgentState) => {
-    try {
-      const note = new SystemMessage({ content: `[node] running: ${name}` });
-      if (Array.isArray(state.messages)) {
-        state.messages.push(note);
-      }
-    } catch (e) {
-      // ignore
-    }
     console.log(`[node] running: ${name}`);
-    return (fn as unknown as (...args: unknown[]) => unknown)(
+    // 执行原始节点函数
+    const result = await (fn as unknown as (...args: unknown[]) => Promise<unknown>)(
       state as unknown as Parameters<T>[0],
     );
+    
+    // 创建节点运行记录消息
+    const note = new SystemMessage({ content: `[node] running: ${name}` });
+    
+    // 构建返回值，确保合并原始结果和新消息
+    const wrappedResult = {
+      ...(result as Record<string, unknown>),
+      messages: [...(state.messages || []), note]
+    };
+    
+    return wrappedResult as unknown as ReturnType<T>;
   }) as unknown as T;
   return wrapper;
 }
@@ -84,7 +99,7 @@ async function routeAgentOutput(state: AgentState) {
 
   // 2. 检查是否有工具执行结果（表示刚完成了一次工具调用）
   // 注意：这里不推进索引，工具执行后会直接回到agent继续处理当前任务
-  if (lastMessage && lastMessage._getType() === "tool_result") {
+  if (lastMessage && ToolMessage.isInstance(lastMessage)) {
     console.log(`[路由调试] 收到工具执行结果，回到agent继续处理当前任务`);
     // 明确返回agent，确保工具执行后回到agent继续处理当前任务，不推进索引
     return "agent";
@@ -104,15 +119,15 @@ async function routeAgentOutput(state: AgentState) {
   // 只有当没有工具调用，也不是工具执行结果，且有明确的任务总结或完成信息时，才认为任务完成
   if (hasTodos && currentTodoIndex < todos.length) {
     // 检查最后一条消息是否是agent的总结性回复
+    const content = getContentAsString(lastMessage?.content || "");
     const isTaskSummary =
       lastMessage &&
       AIMessage.isInstance(lastMessage) &&
-      typeof lastMessage.content === "string" &&
-      lastMessage.content.trim().length > 0;
+      content.trim().length > 0;
 
-    if (isTaskSummary && typeof lastMessage.content === "string") {
+    if (isTaskSummary) {
       // 增强任务完成判断：检查是否包含完成相关的关键词
-      const content = lastMessage.content.toLowerCase();
+      const contentLower = content.toLowerCase();
 
       // 明确的完成信号
       const completionSignals = [
@@ -148,7 +163,7 @@ async function routeAgentOutput(state: AgentState) {
 
       // 检查是否包含完成信号
       const containsCompletionSignal = completionSignals.some((signal) =>
-        content.includes(signal.toLowerCase()),
+        contentLower.includes(signal.toLowerCase()),
       );
 
       // 检查是否明确提到正在处理当前任务
@@ -158,7 +173,7 @@ async function routeAgentOutput(state: AgentState) {
 
       // 检查是否包含未完成信号
       const containsNotCompleteSignal = notCompleteSignals.some((signal) =>
-        content.includes(signal.toLowerCase()),
+        contentLower.includes(signal.toLowerCase()),
       );
 
       // 检查是否有工具执行结果的引用
@@ -207,8 +222,14 @@ async function routeAgentOutput(state: AgentState) {
     return "summarize";
   }
 
-  // 6. 默认结束
-  console.log(`[路由调试] 默认结束工作流`);
+  // 6. 当todos为空时，保持工作流活跃，回到agent等待用户输入
+  if (todos.length === 0) {
+    console.log(`[路由调试] todos为空，回到agent等待新输入`);
+    return "agent";
+  }
+
+  // 7. 默认结束（仅当有todos且所有任务完成时）
+  console.log(`[路由调试] 所有任务完成，结束工作流`);
   return END;
 }
 
