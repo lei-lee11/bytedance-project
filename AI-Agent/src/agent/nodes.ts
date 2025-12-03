@@ -16,16 +16,47 @@ import {
   buildUnitTestOnlyPrompt,
   buildReviewPrompt,
 } from "./prompt.ts";
-import { AgentState } from "./state.js";
-import { baseModel, modelWithTools } from "../config/model.js";
+import { AgentState } from "./state.ts";
+import { baseModel, modelWithTools } from "../config/model.ts";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 // import { Command } from "@langchain/langgraph";
 import { z } from "zod";
+import { tools, SENSITIVE_TOOLS } from "../utils/tools/index.js";
+import path from "path";
+
+import { project_tree } from "../utils/tools/project_tree.js";
+
 // 简单的代码审查结构化输出 schema，供 reviewCode 节点使用（避免导入时 ReferenceError）
 const CodeReviewSchema = z.object({
   decision: z.enum(["pass", "fail"]),
   issues: z.string().optional(),
 });
+
+// 行动记录更新节点：将最近的工具调用记录整理为可读的 recentActions
+export const updateRecentActionsNode = (state: AgentState): Partial<AgentState> => {
+  const { lastToolCalls = [], recentActions = "" } = state;
+
+  if (!lastToolCalls.length) return {};
+
+  const newLines = lastToolCalls.map(
+    (c) => `- 工具 ${c.name}: ${c.detail}`
+  );
+
+  const newRecentActions = 
+    (recentActions ? recentActions + "\n" : "") + newLines.join("\n");
+
+  // 限制 recentActions 的最大长度
+  const maxLen = 4000;
+  const clipped = 
+    newRecentActions.length > maxLen
+      ? newRecentActions.slice(-maxLen)
+      : newRecentActions;
+
+  return {
+    recentActions: clipped,
+    lastToolCalls: [], // 清空，下一轮再填
+  };
+};
 
 // 从模型生成的文本中尝试提取测试计划（简单实现：查找 '### Step 2' 后的内容）
 function extractTestPlan(text: unknown): string | undefined {
@@ -35,11 +66,7 @@ function extractTestPlan(text: unknown): string | undefined {
   if (idx === -1) return undefined;
   return text.slice(idx);
 }
-import { tools, SENSITIVE_TOOLS } from "../utils/tools/index.ts";
-import path from "path";
-import { randomUUID } from "crypto";
 const MAX_RETRIES = 5;
-import { project_tree } from "../utils/tools/project_tree.ts";
 
 type ToolLike = {
   name?: string;
@@ -417,6 +444,7 @@ export const toolExecutor = async (state: AgentState) => {
   const messages = state.messages || [];
   const lastMessage = messages[messages.length - 1];
   const outMsgs: SystemMessage[] = [];
+  const lastToolCalls = state.lastToolCalls || [];
 
   if (!lastMessage || !AIMessage.isInstance(lastMessage)) {
     return {};
@@ -502,6 +530,10 @@ export const toolExecutor = async (state: AgentState) => {
           content: `工具 ${name} 已被跳过，请修正路径参数后重试。`,
         }),
       );
+      lastToolCalls.push({
+        name,
+        detail: `工具 ${name} 已被跳过：路径参数错误`
+      });
       continue;
     }
 
@@ -511,6 +543,10 @@ export const toolExecutor = async (state: AgentState) => {
     );
     if (!tool || typeof tool.func !== "function") {
       outMsgs.push(new SystemMessage({ content: `工具未找到: ${name}` }));
+      lastToolCalls.push({
+        name,
+        detail: `工具未找到: ${name}`
+      });
       continue;
     }
 
@@ -525,12 +561,42 @@ export const toolExecutor = async (state: AgentState) => {
           content: `工具 ${name} 执行成功：\n${String(result)}`,
         }),
       );
+      
+      // 记录工具调用成功信息
+      let detail = `工具 ${name} 执行成功`;
+      if (name === 'write_file' || name === 'update_file') {
+        const filePath = sanitizedArgs.file_path || sanitizedArgs.filePath;
+        if (filePath) {
+          detail += `：修改文件 ${filePath}`;
+        }
+      } else if (name === 'run_command') {
+        const command = sanitizedArgs.command;
+        if (command) {
+          detail += `：执行命令 ${command}`;
+        }
+      } else if (name === 'read_file') {
+        const filePath = sanitizedArgs.file_path || sanitizedArgs.filePath;
+        if (filePath) {
+          detail += `：读取文件 ${filePath}`;
+        }
+      } else if (name === 'list_files') {
+        const dirPath = sanitizedArgs.dir_path || sanitizedArgs.dirPath;
+        if (dirPath) {
+          detail += `：列出目录 ${dirPath}`;
+        }
+      }
+      
+      lastToolCalls.push({ name, detail });
     } catch (err) {
       const errMsg =
         typeof err === "string" ? err : (err as Error)?.message || String(err);
       outMsgs.push(
         new SystemMessage({ content: `工具 ${name} 执行失败：\n${errMsg}` }),
       );
+      lastToolCalls.push({
+        name,
+        detail: `工具 ${name} 执行失败：${errMsg.substring(0, 100)}${errMsg.length > 100 ? '...' : ''}`
+      });
     }
   }
 
@@ -541,6 +607,7 @@ export const toolExecutor = async (state: AgentState) => {
   return {
     messages: [...messages, ...outMsgs],
     projectTreeInjected: false,
+    lastToolCalls
   };
 };
 
@@ -548,6 +615,7 @@ export const agent = async (state: AgentState) => {
   const {
     messages,
     summary,
+    recentActions,
     projectProfile,
     testPlanText,
     todos = [],
@@ -556,99 +624,110 @@ export const agent = async (state: AgentState) => {
     projectTreeText,
   } = state;
 
-  const contextMessages: SystemMessage[] = [];
+  const parts: string[] = [];
 
-  // 1. 添加项目结构信息（如果有），限制大小以避免上下文过大
+  // 1) 项目结构
   if (projectTreeText && projectTreeText.trim()) {
-    // 限制项目树文本的大小，避免上下文超限
-    const maxTreeLength = 5000; // 设置合理的最大长度
+    const maxTreeLength = 5000;
     const truncatedTreeText =
       projectTreeText.length > maxTreeLength
         ? projectTreeText.substring(0, maxTreeLength) +
           "\n...（项目结构过大，已截断）"
         : projectTreeText;
 
-    contextMessages.push(
-      new SystemMessage({
-        content: `## 当前项目结构\n\n${truncatedTreeText}\n`,
-      }),
-    );
+    parts.push(`## 当前项目结构\n${truncatedTreeText}`);
   }
 
-  // 2. 当前要做的 Todo / 任务 - 重点增强任务专注度
+  // 2) 任务 & Todo 列表
   const todoFromList = todos[currentTodoIndex];
-  const effectiveTask = todoFromList || currentTask; // 优先用 todo 列表里的
+  const effectiveTask = todoFromList || currentTask;
   const totalTasks = todos.length;
   const currentTaskNumber = currentTodoIndex + 1;
 
   if (effectiveTask) {
-    contextMessages.push(
-      new SystemMessage({
-        content:
-          `你是一个专注执行任务的开发助手。\n` +
-          `==========================\n` +
-          `📋 当前任务 (${currentTaskNumber}/${totalTasks}):\n` +
-          `「${effectiveTask}」\n` +
-          `==========================\n` +
-          `重要说明:\n` +
-          `- 你的唯一目标是完成当前任务，不要处理其他任务\n` +
-          `- 任务列表由 taskPlannerNode 生成，你必须严格按照计划执行\n` +
-          `- 任务完成后自然结束回复，工作流会自动推进到下一个任务\n` +
-          `- 如果遇到问题无法完成，明确说明原因\n` +
-          `- 可以使用工具来完成任务，如创建/修改文件、运行命令等\n` +
-          `\n请直接开始执行当前任务，不要询问用户确认。`,
-      }),
+    parts.push(
+      [
+        "你是一个专注执行任务的开发助手。",
+        "==========================",
+        `📋 当前任务 (${currentTaskNumber}/${totalTasks || "?"}):`,
+        `「${effectiveTask}」`,
+        "==========================",
+        "重要说明:",
+        "- 你的唯一目标是完成当前任务，不要处理其他任务",
+        "- 任务列表由 taskPlannerNode 生成，你必须严格按照计划执行",
+        "- 任务完成后自然结束回复，工作流会自动推进到下一个任务",
+        "- 如果遇到问题无法完成，明确说明原因",
+        "- 可以使用工具来完成任务，如创建/修改文件、运行命令等",
+        "",
+        "请直接开始执行当前任务，不要询问用户确认。",
+      ].join("\n")
     );
   }
 
-  // 添加任务列表概览，帮助agent了解全局进度
   if (todos.length > 0) {
-    const todoSummary = `## 任务列表概览\n${todos
-      .map(
-        (todo, idx) =>
-          `${idx === currentTodoIndex ? "🔄" : idx < currentTodoIndex ? "✅" : "⬜"} ${idx + 1}. ${todo}`,
-      )
-      .join("\n")}\n\n你现在正在执行任务 ${currentTaskNumber}。`;
+    const todoSummary =
+      "## 任务列表概览\n" +
+      todos
+        .map((todo, idx) => {
+          const icon =
+            idx === currentTodoIndex ? "🔄" : idx < currentTodoIndex ? "✅" : "⬜";
+          return `${icon} ${idx + 1}. ${todo}`;
+        })
+        .join("\n") +
+      `\n\n你现在正在执行任务 ${currentTaskNumber}。`;
 
-    contextMessages.push(new SystemMessage({ content: todoSummary }));
+    parts.push(todoSummary);
   }
 
-  // 2. 添加摘要（如果有）
+  // 3) 对话长期摘要
   if (summary) {
-    contextMessages.push(
-      new SystemMessage({
-        content:
-          `对话摘要：\n${summary}\n\n` + `请基于此摘要和最新消息生成响应。`,
-      }),
-    );
+    parts.push(`## 历史摘要\n${summary}`);
   }
 
-  // 3. 添加项目信息（如果有）
+  // 4) 最近几步的动作记录（关键！）
+  if (recentActions) {
+    parts.push(`## 最近几步的操作记录\n${recentActions}`);
+  }
+
+  // 5) 项目信息
   if (projectProfile) {
-    contextMessages.push(
-      new SystemMessage({
-        content:
-          `项目信息：\n` +
-          `- 主要语言: ${projectProfile.primaryLanguage}\n` +
-          `- 测试框架: ${projectProfile.testFrameworkHint || "未知"}\n\n` +
-          `请生成符合项目风格的代码和文件操作，尽量沿用既有风格。`,
-      }),
+    parts.push(
+      [
+        "## 项目信息",
+        `- 主要语言: ${projectProfile.primaryLanguage}`,
+        `- 测试框架: ${projectProfile.testFrameworkHint || "未知"}`,
+        "",
+        "请生成符合项目风格的代码和文件操作，尽量沿用既有风格。",
+      ].join("\n")
     );
   }
 
-  // 4. 添加测试计划（如果有）
+  // 6) 测试计划
   if (testPlanText) {
-    contextMessages.push(
-      new SystemMessage({
-        content:
-          `当前测试计划摘要：\n${testPlanText}\n\n` +
-          `请确保生成的代码和文件操作有利于通过这些测试。`,
-      }),
+    parts.push(
+      [
+        "## 当前测试计划摘要",
+        testPlanText,
+        "",
+        "请确保生成的代码和文件操作有利于通过这些测试。",
+      ].join("\n")
     );
   }
 
-  // 5. 合并消息并调用模型
-  const fullMessages = [...contextMessages, ...messages];
+  const systemContext = parts.join("\n\n");
+
+  // 7) 对 messages 做一个简单截断（比如保留最后 10 条）
+  const MAX_HISTORY = 10;
+  const trimmedMessages =
+    messages.length > MAX_HISTORY
+      ? messages.slice(-MAX_HISTORY)
+      : messages;
+
+  const fullMessages = [
+    new SystemMessage({ content: systemContext }),
+    ...trimmedMessages,
+  ];
+
   // 如果 state 指定了 projectRoot，临时切换进程工作目录
   const originalCwd = process.cwd();
   try {

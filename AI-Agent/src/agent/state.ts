@@ -86,6 +86,18 @@ export const StateAnnotation = Annotation.Root({
     reducer: (_prev: string[], next: string[]) => next,
     default: () => [],
   }),
+
+  // 最近几步的操作记录
+  recentActions: Annotation<string>({
+    value: (_prev, next) => next,
+    default: () => "",
+  }),
+
+  // 最近的工具调用记录（用于更新recentActions）
+  lastToolCalls: Annotation<Array<{name: string, detail: string}>> ({
+    reducer: (_prev, next) => next,
+    default: () => [],
+  }),
 });
 
 export type AgentState = typeof StateAnnotation.State;
@@ -123,6 +135,8 @@ export function createAgentState(
     todos: [],
     currentTodoIndex: 0,
     pendingFilePaths: [],
+    recentActions: "",
+    lastToolCalls: [],
   } as AgentState;
 
   return {
