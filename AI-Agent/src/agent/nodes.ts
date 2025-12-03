@@ -32,6 +32,21 @@ const CodeReviewSchema = z.object({
   issues: z.string().optional(),
 });
 
+// 工具函数：从消息数组中获取最近的一条HumanMessage
+const getLastHumanMessage = (messages: AgentState["messages"]): HumanMessage | undefined => {
+  if (!Array.isArray(messages)) return undefined;
+  
+  // 反向遍历消息数组，找到最近的一条HumanMessage
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message && message._getType() === "human") {
+      return message as HumanMessage;
+    }
+  }
+  
+  return undefined;
+};
+
 // 行动记录更新节点：将最近的工具调用记录整理为可读的 recentActions
 export const updateRecentActionsNode = (state: AgentState): Partial<AgentState> => {
   const { lastToolCalls = [], recentActions = "" } = state;
@@ -67,7 +82,7 @@ export const TaskIntentSchema = z.object({
 export async function intentNode(
   state: AgentState,
 ): Promise<Partial<AgentState>> {
-  const lastUser = state.messages[state.messages.length - 1];
+  const lastUser = getLastHumanMessage(state.messages);
 
   const system = new SystemMessage({
     content: [
@@ -181,7 +196,7 @@ export async function plannerNode(
 export async function bugFixTaskPlannerNode(
   state: AgentState,
 ): Promise<Partial<AgentState>> {
-  const lastUser = state.messages[state.messages.length - 1];
+  const lastUser = getLastHumanMessage(state.messages);
   const projectRoot = state.projectRoot || ".";
   const projectTree = state.projectTreeText ?? "";
   const testPlan = state.testPlanText ?? "";
@@ -197,13 +212,14 @@ export async function bugFixTaskPlannerNode(
       "   - 定位相关文件和函数",
       "   - 阅读和分析相关代码",
       "   - 修改代码并解释修改思路",
-      "   - 运行测试命令（例如 pytest），验证是否修复",
+      "   - 运行测试验证修复效果（关注测试目标而非具体命令）",
       "2. 每个 ToDo 文本应包含：",
       "   - 具体目标（比如：找出导致 test_xxx 失败的原因）",
-      "   - 建议使用的工具或操作（例如：read_file, run_command）",
+      "   - 建议使用的工具类型或操作目标（例如：查看文件内容、运行测试）",
       "   - 验收标准（例如：指定测试用例通过、不再出现某个错误信息）。",
-      "3. ToDo 数量建议 3~8 条之间，粒度适中。",
-      "4. 只输出结构化字段 todos（string[]），不要输出其他内容。",
+      "3. 任务描述应关注任务目标而非具体命令（例如：说\"运行测试验证修复效果\"而非\"执行pytest命令\"）。",
+      "4. ToDo 数量建议 3~8 条之间，粒度适中。",
+      "5. 只输出结构化字段 todos（string[]），不要输出其他内容。",
     ].join("\n"),
   });
 
@@ -249,7 +265,7 @@ export async function bugFixTaskPlannerNode(
 export async function codeChangeTaskPlannerNode(
   state: AgentState,
 ): Promise<Partial<AgentState>> {
-  const lastUser = state.messages[state.messages.length - 1];
+  const lastUser = getLastHumanMessage(state.messages);
   const projectPlan = state.projectPlanText ?? "";      // 有可能是空（比如老项目）
   const initSteps = state.projectInitSteps ?? [];
   const projectTree = state.projectTreeText ?? "";
@@ -260,10 +276,11 @@ export async function codeChangeTaskPlannerNode(
       "本次任务类型为 feature/refactor（在现有项目上增加功能或重构）。",
       "",
       "要求：",
-      "1. 任务描述必须详细具体，包含：目标、主要操作步骤、验收标准、预期输出。",
-      "2. ToDo 应体现在现有项目结构基础上工作，充分利用已有模块。",
-      "3. 如果提供了 projectInitSteps，则前几条任务需要完成这些前置步骤（如安装依赖、基础配置），之后进入具体功能开发。",
-      "4. 只输出结构化字段 todos（string[]）。",
+      "1. 任务描述必须详细具体，包含：任务目标、主要操作步骤、验收标准、预期输出。",
+      "2. 任务描述应关注任务目标而非具体命令（例如：说\"下载项目依赖\"而非\"执行npm install\"）。",
+      "3. ToDo 应体现在现有项目结构基础上工作，充分利用已有模块。",
+      "4. 如果提供了 projectInitSteps，则前几条任务需要完成这些前置步骤（如安装依赖、基础配置），之后进入具体功能开发。",
+      "5. 只输出结构化字段 todos（string[]）。",
     ].join("\n"),
   });
 
@@ -552,6 +569,8 @@ export async function projectPlannerNode(
       "你是架构规划助手，只负责决定技术栈和项目结构，不负责拆细粒度 ToDo。",
       "你需要输出结构化结果：projectPlanText, techStackSummary, projectInitSteps。",
       "projectInitSteps 必须是可以直接执行的工程级初始化步骤（例如：创建项目、安装依赖、生成配置文件、初始化样式框架等）。",
+      "不要生成需要人工参与的任务，如：原型设计、调研、需求分析、市场研究、用户测试等。",
+      "只关注技术实现细节，提供具体的技术栈选择和项目结构建议，避免抽象的设计讨论。",
       "不要输出额外说明或自由文本，严格按结构化格式返回。",
     ].join("\n"),
   });
@@ -594,17 +613,20 @@ export async function projectPlannerNode(
 export async function taskPlannerNode(
   state: AgentState,
 ): Promise<Partial<AgentState>> {
-  const lastUser = state.messages[state.messages.length - 1];
+  const lastUser = getLastHumanMessage(state.messages);
   const projectPlan = state.projectPlanText ?? "";
   const initSteps = state.projectInitSteps ?? [];
 
   const system = new SystemMessage({
     content: [
       "你是开发任务拆解助手，负责生成详细、可直接执行的 ToDo 列表。",
-      "任务描述必须详细具体，包含：1)具体目标 2)操作步骤 3)验收标准 4)预期成果。",
+      "任务描述必须详细具体，包含：1)任务目标 2)操作步骤 3)验收标准 4)预期成果。",
+      "任务描述应关注任务目标而非具体命令（例如：说'下载项目依赖'而非'执行npm install'）。",
       "前几条任务必须覆盖上游提供的 projectInitSteps（不允许遗漏），并对这些步骤进行详细描述和扩展。",
       "确保每个任务描述足够清晰，让执行agent一看就知道要做什么、如何做、以及完成标准是什么。",
       "任务粒度要适中，避免过于简单或过于复杂的任务描述。",
+      "只生成与代码开发相关的具体任务，禁止生成需要人工参与的任务，如：原型设计、调研、需求分析、市场研究、用户测试等。",
+      "确保每个任务都可以通过调用工具或编写代码完成，避免生成抽象或无法直接执行的任务。",
       "只输出结构化字段 todos（string[]）。",
     ].join("\n"),
   });

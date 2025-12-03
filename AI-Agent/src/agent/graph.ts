@@ -5,7 +5,6 @@ import { MemorySaver } from "@langchain/langgraph";
 import { SENSITIVE_TOOLS } from "../utils/tools/index.ts";
 import {
   summarizeConversation,
-  toolNode,
   toolExecutor,
   agent,
   humanReviewNode,
@@ -79,8 +78,8 @@ async function routeAgentOutput(state: AgentState) {
       return "human_review"; // 路由到审批节点
     }
 
-    console.log(`[路由调试] 普通工具，路由到toolNode`);
-    return "toolNode"; // 安全工具，直接执行
+    console.log(`[路由调试] 普通工具，直接路由到toolExecutor`);
+    return "toolExecutor"; // 安全工具，直接交给自定义的toolExecutor执行
   }
 
   // 2. 检查是否有工具执行结果（表示刚完成了一次工具调用）
@@ -173,23 +172,27 @@ async function routeAgentOutput(state: AgentState) {
       if (containsCompletionSignal) {
         console.log(`[路由调试] 检测到明确的任务完成信号，推进到下一个任务`);
         return "continue"; // 推进索引，执行下一个任务
-      } else if (explicitlyHandlingTask && !containsNotCompleteSignal) {
-        // 如果明确表示正在处理当前任务但没有未完成信号，可能需要继续
+      } else if (containsNotCompleteSignal) {
+        // 如果包含未完成信号，继续留在agent节点处理
+        console.log(`[路由调试] 检测到未完成信号，继续处理当前任务`);
+        return "agent";
+      } else if (explicitlyHandlingTask) {
+        // 如果明确表示正在处理当前任务，继续处理
         console.log(`[路由调试] 明确表示正在处理当前任务，继续处理`);
         return "agent";
-      } else if (referencesToolResult && !containsCompletionSignal) {
-        // 引用了工具结果但没有完成信号，继续处理
+      } else if (referencesToolResult) {
+        // 引用了工具结果，继续处理
         console.log(`[路由调试] 引用工具结果，继续处理`);
         return "agent";
-      } else if (content.length > 500 && !containsCompletionSignal) {
-        // 长文本但没有完成信号，可能是详细说明，继续处理
+      } else if (content.length > 500) {
+        // 长文本响应，可能是详细说明，继续处理
         console.log(`[路由调试] 长文本响应，继续处理`);
         return "agent";
       } else {
         console.log(
-          `[路由调试] 虽有回复但未检测到明确的任务完成信号，可能需要进一步交互`,
+          `[路由调试] 未检测到明确的任务完成或未完成信号，继续处理当前任务`,
         );
-        return END; // 如果没有明确的完成信号，结束工作流避免重复
+        return "agent"; // 默认继续处理，避免工作流提前结束
       }
     } else {
       console.log(`[路由调试] 未检测到明确的任务完成信号，继续处理当前任务`);
@@ -215,7 +218,6 @@ const workflow = new StateGraph(StateAnnotation)
   .addNode("planner", wrapNode("planner", plannerNode)) // 总调度规划器，根据mode分发
   .addNode("summarize", wrapNode("summarize", summarizeConversation))
   .addNode("agent", wrapNode("agent", agent))
-  .addNode("toolNode", toolNode)
   .addNode("toolExecutor", wrapNode("toolExecutor", toolExecutor))
   .addNode("update_recent_actions", wrapNode("update_recent_actions", updateRecentActionsNode)) // 新增：更新最近操作记录
   .addNode("human_review", wrapNode("human_review", humanReviewNode))
@@ -245,17 +247,16 @@ const workflow = new StateGraph(StateAnnotation)
   .addEdge("inject_project_tree", "agent")
   // agent 输出后，根据路由决定下一步
   .addConditionalEdges("agent", routeAgentOutput, {
-    toolNode: "toolNode", // 安全工具 -> 先交给 toolNode 执行
+    toolExecutor: "toolExecutor", // 安全工具 -> 直接交给自定义的toolExecutor执行
     human_review: "human_review", // 节点名保持一致
     summarize: "summarize",
     continue: "advance_todo", // 关键修复：任务完成后先推进索引，再执行下一个任务
     agent: "agent", // 明确添加agent到agent的自连接，用于工具执行后继续当前任务
     [END]: END,
   })
-  // 敏感工具 -> 人工审批 -> 工具 -> 工具执行器 -> 更新操作记录 -> 回到agent继续处理当前任务
-  .addEdge("human_review", "toolNode")
-  .addEdge("toolNode", "toolExecutor")
-  .addEdge("toolExecutor", "update_recent_actions") // 新增：工具执行后更新最近操作记录
+  // 敏感工具 -> 人工审批 -> 工具执行器 -> 更新操作记录 -> 回到agent继续处理当前任务
+  .addEdge("human_review", "toolExecutor")
+  .addEdge("toolExecutor", "update_recent_actions") // 工具执行后更新最近操作记录
   .addEdge("update_recent_actions", "agent") // 关键修复：更新操作记录后回到agent继续处理当前任务，不推进索引
   // 只有真正完成任务时才通过continue路由推进索引
   .addConditionalEdges(
