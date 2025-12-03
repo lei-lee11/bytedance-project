@@ -107,6 +107,12 @@ export const StateAnnotation = Annotation.Root({
     reducer: (_prev, next) => next,
     default: () => [],
   }),
+
+  // 标记当前todo是否已完成，由agent节点设置、advanceTodo消费
+  taskCompleted: Annotation<boolean>({
+    value: (_prev, next) => next,
+    default: () => false,
+  }),
 });
 
 export type AgentState = typeof StateAnnotation.State;
@@ -147,6 +153,7 @@ export function createAgentState(
     pendingFilePaths: [],
     recentActions: "",
     lastToolCalls: [],
+    taskCompleted: false,
   } as AgentState;
 
   return {

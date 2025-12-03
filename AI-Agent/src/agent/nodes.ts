@@ -32,6 +32,94 @@ const CodeReviewSchema = z.object({
   issues: z.string().optional(),
 });
 
+const TREE_INVALIDATION_TOOLS = new Set([
+  "write_file",
+  "append_to_file",
+  "edit_code_snippet",
+  "restore_from_backup",
+]);
+
+const TASK_COMPLETION_SIGNALS = [
+  "任务完成",
+  "已完成",
+  "已经完成",
+  "完成了",
+  "已达成",
+  "done",
+  "completed",
+  "success",
+];
+
+const TASK_INCOMPLETE_HINTS = [
+  "我会",
+  "我将",
+  "下一步",
+  "准备",
+  "需要继续",
+  "计划",
+  "todo",
+  "pending",
+];
+
+const TASK_SUMMARY_HINTS = ["总结", "结果", "完成情况", "复盘"];
+
+const messageContentToString = (content: unknown): string => {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (part && typeof part === "object") {
+          if ("text" in part && typeof (part as { text?: unknown }).text === "string") {
+            return String((part as { text?: unknown }).text);
+          }
+          if (
+            "content" in part &&
+            typeof (part as { content?: unknown }).content === "string"
+          ) {
+            return String((part as { content?: unknown }).content);
+          }
+        }
+        return "";
+      })
+      .join("\n");
+  }
+  return "";
+};
+
+export const detectTaskCompletionFromMessage = (
+  message: AIMessage,
+  currentTask?: string,
+): boolean => {
+  if (!message || !AIMessage.isInstance(message)) return false;
+  if (message.tool_calls && message.tool_calls.length > 0) return false;
+
+  const content = messageContentToString(message.content).trim();
+  if (!content) return false;
+  const lower = content.toLowerCase();
+
+  if (TASK_INCOMPLETE_HINTS.some((hint) => lower.includes(hint.toLowerCase()))) {
+    return false;
+  }
+
+  if (TASK_COMPLETION_SIGNALS.some((signal) => lower.includes(signal.toLowerCase()))) {
+    return true;
+  }
+
+  const mentionsTask = currentTask
+    ? lower.includes(currentTask.toLowerCase())
+    : false;
+
+  if (
+    mentionsTask &&
+    TASK_SUMMARY_HINTS.some((hint) => lower.includes(hint.toLowerCase()))
+  ) {
+    return true;
+  }
+
+  return false;
+};
+
 // 工具函数：从消息数组中获取最近的一条HumanMessage
 const getLastHumanMessage = (messages: AgentState["messages"]): HumanMessage | undefined => {
   if (!Array.isArray(messages)) return undefined;
@@ -561,7 +649,13 @@ export const toolNode = new ToolNode(tools);
 export async function projectPlannerNode(
   state: AgentState,
 ): Promise<Partial<AgentState>> {
-  const lastUser = state.messages[state.messages.length - 1];
+  const lastUser = getLastHumanMessage(state.messages);
+  const userContent =
+    typeof lastUser?.content === "string"
+      ? lastUser.content
+      : lastUser?.content
+      ? JSON.stringify(lastUser.content)
+      : state.summary || "";
   const projectRoot = state.projectRoot || ".";
 
   const system = new SystemMessage({
@@ -580,7 +674,7 @@ export async function projectPlannerNode(
       `项目根目录：\`${projectRoot}\``,
       "用户需求：",
       "--------------------------------",
-      lastUser?.content ?? "",
+      userContent || "(未找到最近的用户输入)",
       "--------------------------------",
     ].join("\n"),
   });
@@ -678,6 +772,7 @@ export const toolExecutor = async (state: AgentState) => {
   const lastMessage = messages[messages.length - 1];
   const outMsgs: SystemMessage[] = [];
   const lastToolCalls = state.lastToolCalls || [];
+  let shouldRefreshProjectTree = false;
 
   if (!lastMessage || !AIMessage.isInstance(lastMessage)) {
     return {};
@@ -819,7 +914,11 @@ export const toolExecutor = async (state: AgentState) => {
         }
       }
       
-      lastToolCalls.push({ name, detail });
+            lastToolCalls.push({ name, detail });
+
+            if (TREE_INVALIDATION_TOOLS.has(name)) {
+              shouldRefreshProjectTree = true;
+            }
     } catch (err) {
       const errMsg =
         typeof err === "string" ? err : (err as Error)?.message || String(err);
@@ -839,7 +938,7 @@ export const toolExecutor = async (state: AgentState) => {
   // 这样下次agent调用前会重新获取最新的项目结构
   return {
     messages: [...messages, ...outMsgs],
-    projectTreeInjected: false,
+    ...(shouldRefreshProjectTree ? { projectTreeInjected: false } : {}),
     lastToolCalls
   };
 };
@@ -963,16 +1062,30 @@ export const agent = async (state: AgentState) => {
 
   const systemContext = parts.join("\n\n");
 
-  // 7) 对 messages 做一个简单截断（比如保留最后 10 条）
+  // 7) 仅保留最近的对话（Human/AI/Tool），避免系统提示淹没用户内容
   const MAX_HISTORY = 10;
-  const trimmedMessages =
-    messages.length > MAX_HISTORY
-      ? messages.slice(-MAX_HISTORY)
-      : messages;
+  const dialogueMessages: typeof messages = [];
+  for (let i = messages.length - 1; i >= 0 && dialogueMessages.length < MAX_HISTORY; i--) {
+    const msg = messages[i];
+    if (!msg) continue;
+    const type = (msg as { type?: string }).type;
+    if (type === "human" || type === "ai" || type === "tool") {
+      dialogueMessages.unshift(msg);
+    }
+  }
+
+  const hasHumanContext = dialogueMessages.some(
+    (msg) => (msg as { type?: string }).type === "human",
+  );
+  const lastHuman = getLastHumanMessage(messages);
+  const enrichedMessages =
+    !hasHumanContext && lastHuman
+      ? [lastHuman, ...dialogueMessages]
+      : dialogueMessages;
 
   const fullMessages = [
     new SystemMessage({ content: systemContext }),
-    ...trimmedMessages,
+    ...enrichedMessages,
   ];
 
   // 如果 state 指定了 projectRoot，临时切换进程工作目录
@@ -986,6 +1099,10 @@ export const agent = async (state: AgentState) => {
       }
     }
     const response = await modelWithTools.invoke(fullMessages);
+    const didCompleteTask =
+      AIMessage.isInstance(response)
+        ? detectTaskCompletionFromMessage(response, effectiveTask)
+        : false;
     // 恢复 cwd
     try {
       process.chdir(originalCwd);
@@ -995,6 +1112,7 @@ export const agent = async (state: AgentState) => {
     return {
       messages: [...messages, response],
       currentTask: effectiveTask,
+      taskCompleted: didCompleteTask,
     };
   } finally {
     try {
@@ -1056,9 +1174,15 @@ export const humanReviewNode = async (state: AgentState) => {
 export function parseTodos(planText: string): string[] {
   const lines = planText.split("\n");
 
-  const start = lines.findIndex((line) =>
-    line.trim().startsWith("## 开发 ToDo 列表"),
-  );
+  const start = lines.findIndex((line) => {
+    const trimmed = line.trim().toLowerCase();
+    if (!trimmed) return false;
+    if (trimmed.startsWith("##") && trimmed.includes("todo")) {
+      return true;
+    }
+    return trimmed.endsWith("todos:") || trimmed.endsWith("todo:");
+  });
+
   if (start === -1) return [];
 
   const todos: string[] = [];
@@ -1070,9 +1194,12 @@ export function parseTodos(planText: string): string[] {
     if (trimmed.startsWith("## ")) break;
 
     // 只收列表项
-    if (/^[-•\d.]/.test(trimmed)) {
-      const cleaned = trimmed.replace(/^[-•\d.\s]+/, "").trim();
+    if (/^([-•*]|\d+\.|\d+\)|\(\d+\))/.test(trimmed)) {
+      const cleaned = trimmed.replace(/^([-•*]|\d+\.|\d+\)|\(\d+\))\s*/, "").trim();
       if (cleaned) todos.push(cleaned);
+    } else if (todos.length > 0 && trimmed === "") {
+      // 空行且已经收集了todo，则认为列表结束
+      break;
     }
   }
 

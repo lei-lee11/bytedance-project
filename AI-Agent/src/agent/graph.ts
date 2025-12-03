@@ -17,17 +17,6 @@ import {
 
 const checkpointer = new MemorySaver();
 
-// 辅助函数：将消息内容转换为字符串，处理字符串或数组类型
-function getContentAsString(content: string | Array<{ type: string; text?: string; [key: string]: unknown }>): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (Array.isArray(content)) {
-    return content.map(item => item.text || "").join(" ");
-  }
-  return "";
-}
-
 // wrapNode: 在每个节点执行前，把当前节点名写入 state.messages（SystemMessage）并在控制台打印，
 // 这样在运行智能体时可以观察当前执行的是哪个节点。
 function wrapNode<T extends (...args: unknown[]) => unknown>(
@@ -45,9 +34,13 @@ function wrapNode<T extends (...args: unknown[]) => unknown>(
     const note = new SystemMessage({ content: `[node] running: ${name}` });
     
     // 构建返回值，确保合并原始结果和新消息
+    const previousMessages = Array.isArray((result as { messages?: unknown })?.messages)
+      ? ((result as { messages?: SystemMessage[] }).messages ?? [])
+      : state.messages || [];
+
     const wrappedResult = {
       ...(result as Record<string, unknown>),
-      messages: [...(state.messages || []), note]
+      messages: [...previousMessages, note],
     };
     
     return wrappedResult as unknown as ReturnType<T>;
@@ -105,130 +98,34 @@ async function routeAgentOutput(state: AgentState) {
     return "agent";
   }
 
-  // 3. 检查 todo 是否已经全部完成
   const hasTodos = todos.length > 0;
   const allTodosDone = hasTodos && currentTodoIndex >= todos.length;
 
-  // 关键修复：确保当所有todo完成时正确结束工作流
   if (allTodosDone) {
     console.log(`[路由调试] 所有todo已完成，结束工作流`);
     return END;
   }
 
-  // 4. 判断当前任务是否真正完成（这是关键判断）
-  // 只有当没有工具调用，也不是工具执行结果，且有明确的任务总结或完成信息时，才认为任务完成
-  if (hasTodos && currentTodoIndex < todos.length) {
-    // 检查最后一条消息是否是agent的总结性回复
-    const content = getContentAsString(lastMessage?.content || "");
-    const isTaskSummary =
-      lastMessage &&
-      AIMessage.isInstance(lastMessage) &&
-      content.trim().length > 0;
-
-    if (isTaskSummary) {
-      // 增强任务完成判断：检查是否包含完成相关的关键词
-      const contentLower = content.toLowerCase();
-
-      // 明确的完成信号
-      const completionSignals = [
-        "已完成",
-        "完成",
-        "任务完成",
-        "已实现",
-        "实现了",
-        "success",
-        "completed",
-        "done",
-        "✅",
-        "已结束",
-        "结束了",
-        "已完成当前任务",
-        "本任务已完成",
-        "已达成目标",
-      ];
-
-      // 任务未完成的信号（避免重复）
-      const notCompleteSignals = [
-        "我会",
-        "我将",
-        "计划",
-        "准备",
-        "需要",
-        "下一步",
-        "接下来",
-        "让我们",
-        "我们需要",
-        "让我来",
-      ];
-
-      // 检查是否包含完成信号
-      const containsCompletionSignal = completionSignals.some((signal) =>
-        contentLower.includes(signal.toLowerCase()),
-      );
-
-      // 检查是否明确提到正在处理当前任务
-      const explicitlyHandlingTask =
-        content.includes("正在处理") &&
-        (content.includes("任务") || content.includes(currentTaskLower));
-
-      // 检查是否包含未完成信号
-      const containsNotCompleteSignal = notCompleteSignals.some((signal) =>
-        contentLower.includes(signal.toLowerCase()),
-      );
-
-      // 检查是否有工具执行结果的引用
-      const referencesToolResult =
-        content.includes("根据") ||
-        content.includes("执行结果") ||
-        content.includes("显示") ||
-        content.includes("返回");
-
-      // 优先级判断逻辑
-      if (containsCompletionSignal) {
-        console.log(`[路由调试] 检测到明确的任务完成信号，推进到下一个任务`);
-        return "continue"; // 推进索引，执行下一个任务
-      } else if (containsNotCompleteSignal) {
-        // 如果包含未完成信号，继续留在agent节点处理
-        console.log(`[路由调试] 检测到未完成信号，继续处理当前任务`);
-        return "agent";
-      } else if (explicitlyHandlingTask) {
-        // 如果明确表示正在处理当前任务，继续处理
-        console.log(`[路由调试] 明确表示正在处理当前任务，继续处理`);
-        return "agent";
-      } else if (referencesToolResult) {
-        // 引用了工具结果，继续处理
-        console.log(`[路由调试] 引用工具结果，继续处理`);
-        return "agent";
-      } else if (content.length > 500) {
-        // 长文本响应，可能是详细说明，继续处理
-        console.log(`[路由调试] 长文本响应，继续处理`);
-        return "agent";
-      } else {
-        console.log(
-          `[路由调试] 未检测到明确的任务完成或未完成信号，继续处理当前任务`,
-        );
-        return "agent"; // 默认继续处理，避免工作流提前结束
-      }
-    } else {
-      console.log(`[路由调试] 未检测到明确的任务完成信号，继续处理当前任务`);
-      // 如果到达这里，可能是工作流异常，返回agent继续
-      return "agent";
-    }
+  if (hasTodos && currentTodoIndex < todos.length && state.taskCompleted) {
+    console.log(`[路由调试] agent标记任务完成，推进到下一个任务`);
+    return "continue";
   }
 
-  // 5. 不走 todo 流程时，按老逻辑看是否需要总结
   if (messages.length > 30) {
     console.log(`[路由调试] 消息过多，需要总结`);
     return "summarize";
   }
 
-  // 6. 当todos为空时，保持工作流活跃，回到agent等待用户输入
+  if (hasTodos) {
+    console.log(`[路由调试] 继续执行当前任务`);
+    return "agent";
+  }
+
   if (todos.length === 0) {
     console.log(`[路由调试] todos为空，回到agent等待新输入`);
     return "agent";
   }
 
-  // 7. 默认结束（仅当有todos且所有任务完成时）
   console.log(`[路由调试] 所有任务完成，结束工作流`);
   return END;
 }
@@ -243,18 +140,25 @@ const workflow = new StateGraph(StateAnnotation)
   .addNode("update_recent_actions", wrapNode("update_recent_actions", updateRecentActionsNode)) // 新增：更新最近操作记录
   .addNode("human_review", wrapNode("human_review", humanReviewNode))
   .addNode("advance_todo", async (state) => {
-    // 安全地推进索引：确保索引不会超过todos数组长度
+    if (!state.taskCompleted) {
+      console.log(
+        `[advance_todo] 未检测到任务完成信号，保持索引 ${state.currentTodoIndex ?? 0}`,
+      );
+      return {};
+    }
+
     const currentIndex = state.currentTodoIndex ?? 0;
     const todosLength = state.todos?.length ?? 0;
-
-    // 只有当当前索引小于todos长度时才增加索引
-    const newIndex =
-      currentIndex < todosLength ? currentIndex + 1 : currentIndex;
+    const newIndex = currentIndex < todosLength ? currentIndex + 1 : currentIndex;
 
     console.log(
       `[advance_todo] 索引更新: ${currentIndex} -> ${newIndex}, todos长度: ${todosLength}`,
     );
-    return { currentTodoIndex: newIndex };
+
+    return {
+      currentTodoIndex: newIndex,
+      taskCompleted: false,
+    };
   })
   .addNode(
     "inject_project_tree",
