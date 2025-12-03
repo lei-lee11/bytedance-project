@@ -3,13 +3,15 @@ import { project_tree_tool } from './project_tree.ts'
 import { testTools } from './testRunner.ts'
 import { backgroundProcessTools } from './backgroundProcess.ts'
 import { codeEditTools } from './code_edit.ts'
+import { codeSearchTools } from './code_search.ts'
 
 const tools =[
     ...file_operations,
     ...project_tree_tool,
     ...testTools,
     ...backgroundProcessTools,
-    ...codeEditTools
+    ...codeEditTools,
+    ...codeSearchTools
 ]
 export const SENSITIVE_TOOLS = [
   "manualTestRunnerTool",
