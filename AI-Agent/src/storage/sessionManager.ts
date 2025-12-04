@@ -12,7 +12,6 @@ import {
     AgentState,
     ISessionManager
 } from './types.js';
-import { BaseMessage } from '@langchain/core/messages';
 import { join } from 'path'; // 需要导入 path 模块
 
 /**
@@ -28,7 +27,7 @@ export class SessionManager implements ISessionManager {
             // 默认在项目根目录下创建 ai-agent-storage 文件夹
             basePath: process.env.AI_AGENT_STORAGE_PATH || join(process.cwd(), 'ai-agent-storage'),
             maxHistoryRecords: 1000,
-            maxCheckpoints: 50,
+            maxCheckpoints: 100,
             ...config
         };
 
@@ -55,13 +54,11 @@ export class SessionManager implements ISessionManager {
 
         const metadata: SessionMetadata = {
             thread_id: threadId,
-            title: options.title || '新会话',
+            title: options.title || ' ',
             created_at: now,
             updated_at: now,
             message_count: 0,
             status: 'active',
-            programming_language: options.programmingLanguage,
-            summary: undefined,
         };
 
         // 保存元数据
@@ -358,64 +355,4 @@ export class SessionManager implements ISessionManager {
         return title;
     }
 
-    /**
-     * 从消息创建历史记录
-     */
-    createHistoryFromMessage(
-        message: BaseMessage,
-        eventType: 'user_message' | 'ai_response'
-    ): Omit<HistoryRecord, 'timestamp'> {
-        return {
-            event_type: eventType,
-            content: message.content as string,
-            display_priority: 'high',
-            metadata: {
-                message_id: message.id,
-                type: message.getType()
-            }
-        };
-    }
-
-    /**
-     * 创建工具调用历史记录
-     */
-    createToolCallHistory(
-        toolName: string,
-        args: Record<string, any>,
-        result?: any,
-        error?: string
-    ): Omit<HistoryRecord, 'timestamp'> {
-        return {
-            event_type: 'tool_call',
-            content: error ? `工具 ${toolName} 执行失败: ${error}` : `工具 ${toolName} 执行成功`,
-            display_priority: 'medium',
-            metadata: {
-                tool_name: toolName,
-                args,
-                result,
-                error
-            }
-        };
-    }
-
-    /**
-     * 创建系统总结历史记录
-     */
-    createSummarizeHistory(
-        oldCount: number,
-        newCount: number,
-        summary: string
-    ): Omit<HistoryRecord, 'timestamp'> {
-        return {
-            event_type: 'system_summarize',
-            content: '系统自动总结了对话历史以优化内存使用',
-            display_priority: 'medium',
-            metadata: {
-                old_message_count: oldCount,
-                new_message_count: newCount,
-                summary_length: summary.length,
-                summary_preview: summary.substring(0, 100)
-            }
-        };
-    }
 }

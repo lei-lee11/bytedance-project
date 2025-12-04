@@ -302,6 +302,25 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
                             additional_kwargs: message.additional_kwargs
                         }
                     });
+
+                    // 检查是否是第一条用户消息，如果是则生成智能标题
+                    // 在添加用户消息到历史记录后，检查历史记录中的用户消息数量
+                    const updatedUserHistory = await this.storage.history.getHistory(threadId, {
+                        eventType: 'user_message',
+                        limit: 1 // 获取第一条用户消息
+                    });
+
+                    // 如果历史记录中只有一条用户消息（即当前刚保存的这条），生成智能标题
+                    if (updatedUserHistory.length === 1) {
+                        try {
+                            console.log(`🎯 检测到第一条用户消息，开始生成智能标题...`);
+                            const smartTitle = await this.storage.sessions.generateSessionTitle(threadId);
+                            console.log(`✨ 生成的智能标题: ${smartTitle}`);
+                        } catch (titleError) {
+                            console.warn(`⚠️ 生成智能标题失败:`, titleError);
+                            // 不影响主要功能，继续执行
+                        }
+                    }
                 } else if (messageType === 'aimessage' || messageType === 'ai') {
                     // AI 响应 - 高优先级
                     const messageContent = message.content?.toString() || '';
@@ -443,8 +462,6 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
                     updated_at: now,
                     message_count: 0,
                     status: 'active',
-                    programming_language: state.projectProfile?.primaryLanguage,
-                    summary: undefined
                 };
 
                 // 直接写入元数据文件，使用传入的 threadId
@@ -619,8 +636,6 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
                 updated_at: now,
                 message_count: 0,
                 status: 'active',
-                programming_language: state.projectProfile?.primaryLanguage,
-                summary: undefined
             };
             await this.storage.files.writeMetadata(threadId, sessionMetadata);
         }
