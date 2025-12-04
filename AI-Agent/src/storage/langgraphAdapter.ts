@@ -475,6 +475,12 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
                 console.log(`✅ 会话创建成功: ${threadId}`);
             } else {
                 console.log(`📋 使用现有会话: ${threadId}`);
+
+                // 自动激活归档会话
+                if (sessionInfo.metadata.status === 'archived') {
+                    console.log(`🔄 自动激活归档会话: ${threadId}`);
+                    await this.storage.sessions.restoreSession(threadId);
+                }
             }
 
             // 获取之前的消息数量，用于确定哪些是新增消息
@@ -638,6 +644,12 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
                 status: 'active',
             };
             await this.storage.files.writeMetadata(threadId, sessionMetadata);
+        } else {
+            // 自动激活归档会话
+            if (sessionInfo.metadata.status === 'archived') {
+                console.log(`🔄 自动激活归档会话 (putWrites): ${threadId}`);
+                await this.storage.sessions.restoreSession(threadId);
+            }
         }
 
         // 直接保存检查点

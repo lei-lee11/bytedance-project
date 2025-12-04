@@ -362,41 +362,46 @@ interface HealthCheckResult {
 ---
 
 ### `cleanup(options?: CleanupOptions)`
-执行系统清理操作，删除过期数据和优化存储空间。
+执行系统清理操作，删除归档会话并归档长时间未活跃的会话。
 
 ```typescript
 const result = await storage.cleanup({
-  olderThanDays: 30,           // 清理30天前的数据
-  maxHistoryRecords: 1000,     // 每个会话最大历史记录数
-  maxCheckpoints: 50,          // 每个会话最大检查点数
-  deleteArchived: false        // 是否删除归档会话
+  olderThanDays: 30           // 归档30天前未更新的会话
 });
 
-console.log(`清理了 ${result.sessionsCleaned} 个会话`);
+console.log(`处理了 ${result.sessionsCleaned} 个会话`);
 console.log(`释放了 ${(result.spaceFreed / 1024 / 1024).toFixed(2)} MB 空间`);
+```
+
+**参数**: `CleanupOptions`
+```typescript
+interface CleanupOptions {
+  olderThanDays?: number;     // 归档超过指定天数的未活跃会话（默认30天）
+}
 ```
 
 **返回值**: `Promise<CleanupResult>`
 ```typescript
 interface CleanupResult {
-  sessionsCleaned: number;        // 清理的会话数
-  historyRecordsDeleted: number;   // 删除的历史记录数
-  checkpointsDeleted: number;      // 删除的检查点数
-  spaceFreed: number;             // 释放的空间(字节)
+  sessionsCleaned: number;    // 处理的会话总数（包括删除和归档）
+  spaceFreed: number;         // 删除归档会话释放的空间(字节)
 }
 ```
 
 **清理策略**:
-- 删除超过指定天数的未活跃会话
-- 限制每个会话的历史记录数量
-- 限制每个会话的检查点数量
-- 可选删除归档会话
+1. **删除归档会话**: 永久删除所有状态为 `'archived'` 的会话
+2. **自动归档**: 将超过 `olderThanDays` 天未更新的活跃会话状态改为 `'archived'`
+
+**自动清理机制**:
+- 历史记录和检查点的数量限制已在添加时自动处理（无需手动清理）
+- 添加历史记录时会自动清理超出 `maxHistoryRecords` 的旧记录
+- 保存检查点时会自动清理超出 `maxCheckpoints` 的旧检查点
 
 **使用场景**:
-- 定期维护任务
+- 定期维护任务（建议设置定时任务）
 - 存储空间管理
-- 性能优化
-- 数据生命周期管理
+- 会话生命周期管理
+- 释放归档会话占用的磁盘空间
 
 ---
 
@@ -457,7 +462,8 @@ console.log(`总存储大小: ${(stats.totalStorageSize / 1024 / 1024).toFixed(2
 
 // 11. 执行清理
 const cleanup = await storage.cleanup({ olderThanDays: 30 });
-console.log(`清理后释放空间: ${(cleanup.spaceFreed / 1024 / 1024).toFixed(2)} MB`);
+console.log(`处理了 ${cleanup.sessionsCleaned} 个会话`);
+console.log(`释放空间: ${(cleanup.spaceFreed / 1024 / 1024).toFixed(2)} MB`);
 
 // 12. 关闭系统
 await storage.close();
