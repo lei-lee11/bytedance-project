@@ -21,3 +21,5 @@ dist
 # LangGraph API
 .langgraph_api
 
+data
+
