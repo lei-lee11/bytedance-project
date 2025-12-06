@@ -4,7 +4,7 @@ import { useRequest } from "ahooks";
 import { marked } from "marked";
 import TerminalRenderer from "marked-terminal";
 import { HumanMessage, ToolMessage } from "@langchain/core/messages";
-// 🔥 修改 1: 引入 initializeGraph
+// 🔥 修改 1: 引入 initializeGraph 和 graph
 import { graph, initializeGraph } from "../agent/graph.js";
 import { Header } from "./components/Header.tsx";
 import { MinimalThinking } from "./components/MinimalThinking.tsx";

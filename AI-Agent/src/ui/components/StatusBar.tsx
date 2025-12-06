@@ -7,6 +7,7 @@ interface StatusBarProps {
 }
 
 export const StatusBar: React.FC<StatusBarProps> = ({ threadId }) => {
+  console.log(threadId);
   const displayId = threadId ? threadId.split("-").pop() : "N/A";
 
   return (
