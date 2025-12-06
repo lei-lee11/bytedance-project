@@ -88,7 +88,7 @@ try {
         projectTreeInjected: false,
     };
 
-    // 9. 执行图 - 第二次调用
+    // 9. 执行图 - 第三次调用
     console.log("\n🔄 第三次图调用...");
     console.log("预期流程: START -> agent (自动加载历史) -> (无工具调用) -> END");
     console.log("LangGraph 会自动从 checkpoint 加载之前的完整对话历史");
@@ -97,8 +97,34 @@ try {
     const result3 = await graph.invoke(thirdInput, config);
     const duration3 = Date.now() - startTime3;
 
-    console.log(`✅ 第二次调用完成，耗时: ${duration3}ms`);
+    console.log(`✅ 第三次调用完成，耗时: ${duration3}ms`);
     console.log(`📝 AI 响应: ${result3.messages[result3.messages.length - 1]?.content || '无'}`);
+
+    // 10. 第四次对话 - 只提供新的用户输入，LangGraph 会自动加载历史
+    console.log("\n💬 第四次用户输入: '期待与你的合作'");
+    const fourthInput = {
+        // 只提供新的用户消息，LangGraph 会自动从 checkpoint 加载之前的对话历史
+        messages: [
+            new HumanMessage({
+                content: "期待与你的合作",
+                id: "human-msg-4"
+            })
+        ],
+        projectRoot: process.cwd(),
+        projectTreeInjected: false,
+    };
+
+    // 11. 执行图 - 第四次调用
+    console.log("\n🔄 第四次图调用...");
+    console.log("预期流程: START -> agent (自动加载历史) -> (无工具调用) -> END");
+    console.log("LangGraph 会自动从 checkpoint 加载之前的完整对话历史");
+
+    const startTime4 = Date.now();
+    const result4 = await graph.invoke(fourthInput, config);
+    const duration4 = Date.now() - startTime4;
+
+    console.log(`✅ 第四次调用完成，耗时: ${duration4}ms`);
+    console.log(`📝 AI 响应: ${result4.messages[result4.messages.length - 1]?.content || '无'}`);
 
 
 } catch (error) {

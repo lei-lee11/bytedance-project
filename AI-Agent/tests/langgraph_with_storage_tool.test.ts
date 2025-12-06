@@ -19,11 +19,11 @@ try {
     };
 
     // 触发工具调用的用户输入
-    console.log("\n💬 用户输入: '帮我查看src目录的文件结构'");
+    console.log("\n💬 用户输入: '在src目录下创建一个hello.txt文件，内容为'欢迎使用命令行工具'");
     const userInput = {
         messages: [
             new HumanMessage({
-                content: "帮我查看src目录的文件结构",
+                content: "在src目录下创建一个hello.txt文件，内容为'欢迎使用命令行工具'",
                 id: "human-msg-1"
             })
         ],
@@ -35,15 +35,33 @@ try {
     console.log("预期流程: START -> agent -> tool 调用 -> 工具执行 -> agent -> END");
 
     const startTime = Date.now();
-    const result = await graph.invoke(userInput, config);
+    await graph.invoke(userInput, config);
     const duration = Date.now() - startTime;
 
     console.log(`✅ 工具调用会话完成，耗时: ${duration}ms`);
 
-    // 分析工具调用
-    result.messages.forEach(msg => {
-        console.log(msg);
-    });
+    // 触发工具调用的用户输入
+    console.log("\n💬 用户输入: '查看test目录结构'");
+    const userInput2 = {
+        messages: [
+            new HumanMessage({
+                content: "查看test目录结构",
+                id: "human-msg-2"
+            })
+        ],
+        projectRoot: process.cwd(),
+        projectTreeInjected: false,
+    };
+
+    console.log("🔄 执行工具调用会话...");
+    console.log("预期流程: START -> agent -> tool 调用 -> 工具执行 -> agent -> END");
+
+    const startTime2 = Date.now();
+    await graph.invoke(userInput2, config);
+    const duration2 = Date.now() - startTime2;
+
+    console.log(`✅ 工具调用会话完成，耗时: ${duration2}ms`);
+
 
 } catch (error) {
     console.error("❌ 工具调用会话示例失败:", error);
