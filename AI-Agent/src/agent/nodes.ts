@@ -1,66 +1,22 @@
-/**
- * Nodes implementation.
- * Prompts/templates are centralized in `src/agent/prompt.ts`.
- * Keep prompts in that file and call the builder functions from nodes.
- */
+import { END, Command } from "@langchain/langgraph";
 import {
-  SystemMessage,
-  RemoveMessage,
-  HumanMessage,
   AIMessage,
+  SystemMessage,
+  HumanMessage,
 } from "@langchain/core/messages";
-import {
-  buildParseUserInputPrompt,
-  buildSummarizePrompt,
-  buildCodeWithTestPlanPrompt,
-  buildUnitTestOnlyPrompt,
-  buildReviewPrompt,
-  buildIntentClassificationPrompt,
-  buildChatAgentPrompt,
-} from "./prompt.ts";
-import { AgentState } from "./state.js";
+import { AgentState } from "./state.ts";
+import { SENSITIVE_TOOLS, tools } from "../utils/tools/index.ts";
 import { baseModel, modelWithTools } from "../config/model.js";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
-import { Command } from "@langchain/langgraph";
-import { z } from "zod";
-// 简单的代码审查结构化输出 schema，供 reviewCode 节点使用（避免导入时 ReferenceError）
-// 注意：OpenAI structured output 要求所有字段必须是 required 或使用 .nullable()
-const CodeReviewSchema = z.object({
-  decision: z.enum(["pass", "fail"]),
-  issues: z.string().nullable().default(""),
-});
-
-// 从模型生成的文本中尝试提取测试计划（简单实现：查找 '### Step 2' 后的内容）
-function extractTestPlan(text: unknown): string | undefined {
-  if (typeof text !== "string") return undefined;
-  const marker = "### Step 2";
-  const idx = text.indexOf(marker);
-  if (idx === -1) return undefined;
-  return text.slice(idx);
-}
-import { tools, SENSITIVE_TOOLS } from "../utils/tools/index.ts";
-import path from "path";
-import { randomUUID } from "crypto";
-const MAX_RETRIES = 5;
 import { project_tree } from "../utils/tools/project_tree.ts";
+import { attachFilesToContext } from "../utils/tools/fileContext.js";
+import {
+  buildIntentClassificationPrompt,
+  buildChatAgentPrompt,
+} from "../agent/prompt.js";
+import { z } from "zod";
 
-type ToolLike = {
-  name?: string;
-  metadata?: { name?: string };
-  func?: (
-    args: Record<string, unknown>,
-    config?: Record<string, unknown>,
-  ) => Promise<unknown> | unknown;
-};
-
-type ToolCall = {
-  name: string;
-  args?: Record<string, unknown>;
-};
-
-// 结构化输出 schema：project planner
-// 注意：OpenAI structured output 要求所有字段必须是 required 或使用 .nullable()
-// 不能使用 .optional()，参考：https://platform.openai.com/docs/guides/structured-outputs
+// Schema 定义
 const ProjectPlanSchema = z.object({
   projectPlanText: z.string(),
   techStackSummary: z.string().nullable().default(""),
@@ -70,12 +26,11 @@ const ProjectPlanSchema = z.object({
     .default(() => []),
 });
 
-// 结构化输出 schema：task planner（返回 todos 列表）
 const TaskPlanSchema = z.object({
   todos: z.array(z.string()),
 });
 
-// 结构化输出 schema：intent classification（意图分类）
+// 意图分类 Schema
 const IntentSchema = z.object({
   intent: z
     .enum(["task", "chat"])
@@ -83,826 +38,644 @@ const IntentSchema = z.object({
   confidence: z.number().min(0).max(1).describe("分类置信度，0-1之间"),
   reasoning: z.string().describe("分类理由"),
 });
-import { attachFilesToContext } from "../utils/tools/fileContext.js";
-
-//解析用户输入，提取用户意图
-export const parseUserInput = async (state: AgentState) => {
-  const historyText = state.messages
-    .map(
-      (msg) =>
-        `[${msg.type === "human" ? "User" : "Assistant"}]: ${msg.content}`,
-    )
-    .join("\n");
-
-  const parsePrompt = [
-    new SystemMessage({ content: buildParseUserInputPrompt(historyText) }),
-  ];
-  const response = await baseModel.invoke(parsePrompt);
-  const parsed = JSON.parse(response.content as string);
-  return {
-    currentTask: parsed.currentTask?.trim() || "",
-    programmingLanguage: parsed.programmingLanguage?.trim() || "",
-    codeContext: parsed.codeContext?.trim() || "",
-  };
-};
-
-// 总结对话历史，截取最新6条message
-export const summarizeConversation = async (state: AgentState) => {
-  // 首先获取现有的摘要
-  const summary = state.summary || "";
-
-  // 摘要提示由 prompt builder 生成
-
-  // 将提示词添加到对话历史中（使用 prompt builder）
-  const promptText = buildSummarizePrompt(summary);
-  const messages = [
-    ...state.messages,
-    new HumanMessage({ content: promptText }),
-  ];
-  const response = await baseModel.invoke(messages);
-
-  // 删除除最后2条外的所有消息（保留原逻辑）
-  const deleteMessages = state.messages
-    .slice(0, -2)
-    .reduce((acc: RemoveMessage[], m) => {
-      if (m && typeof (m as { id?: unknown }).id === "string") {
-        const id = (m as { id?: string }).id as string;
-        acc.push(new RemoveMessage({ id }));
-      }
-      return acc;
-    }, []);
-
-  return {
-    summary: response.content,
-    messages: deleteMessages,
-  };
-};
-
 /**
- * 处理用户引用的文件，将内容直接注入为系统消息
- * 这样文件内容只在当前轮次使用，不会持久化累积
+ * 意图分类节点
+ * 判断用户输入是编程任务还是闲聊
  */
-export const processReferencedFiles = async (state: AgentState) => {
-  const newFilePaths = state.pendingFilePaths || [];
-
-  if (newFilePaths.length === 0) {
-    return {}; // 没有新文件，不做任何操作
-  }
+export async function intentClassifierNode(state: AgentState) {
+  console.log("[classifier] 开始意图分类");
 
   try {
-    const projectRoot = state.projectRoot || process.cwd();
+    // 获取最新的用户消息
+    const lastMessage = state.messages[state.messages.length - 1];
+    const userInput = lastMessage.content.toString();
 
-    // 读取并格式化文件
-    const { formattedContext } = await attachFilesToContext(
-      newFilePaths,
-      projectRoot,
+    console.log(`[classifier] 分析用户输入: ${userInput.substring(0, 100)}...`);
+
+    // 使用结构化输出进行意图分类
+    const classificationPrompt = buildIntentClassificationPrompt();
+    const modelWithStructuredOutput =
+      baseModel.withStructuredOutput(IntentSchema);
+
+    const result = await modelWithStructuredOutput.invoke([
+      new SystemMessage(classificationPrompt),
+      new HumanMessage(userInput),
+    ]);
+
+    console.log(
+      `[classifier] 分类结果: ${result.intent}, 置信度: ${result.confidence}, 理由: ${result.reasoning}`,
     );
 
-    // 将文件内容作为 SystemMessage 直接注入到消息流
-    // 这样内容会成为对话历史的一部分，可被 summarize 压缩
-    const fileContextMessage = new SystemMessage({
-      content: formattedContext,
-      additional_kwargs: {
-        message_type: "file_context",
+    // 根据意图路由
+    if (result.intent === "task") {
+      console.log("[classifier] → 路由到 planner（任务模式）");
+      return new Command({
+        goto: "planner",
+      });
+    } else {
+      console.log("[classifier] → 路由到 chat（闲聊模式）");
+      return new Command({
+        goto: "chat",
+      });
+    }
+  } catch (error) {
+    console.error("[classifier] 意图分类失败:", error);
+    // 默认路由到闲聊，提供友好体验
+    console.log("[classifier] 错误处理 → 路由到 chat");
+    return new Command({
+      goto: "chat",
+    });
+  }
+}
+
+/**
+ * 闲聊节点
+ * 处理非编程任务的对话
+ */
+export async function chatNode(state: AgentState) {
+  console.log("[chat] 生成闲聊回复");
+
+  try {
+    // 获取最新的用户消息
+    const lastMessage = state.messages[state.messages.length - 1];
+    const userInput = lastMessage.content.toString();
+
+    console.log(`[chat] 处理闲聊: ${userInput.substring(0, 100)}...`);
+
+    // 生成闲聊回复
+    const chatPrompt = buildChatAgentPrompt();
+    const response = await baseModel.invoke([
+      new SystemMessage(chatPrompt),
+      new HumanMessage(userInput),
+    ]);
+
+    console.log(
+      `[chat] 回复: ${response.content.toString().substring(0, 100)}...`,
+    );
+
+    // 返回回复并结束
+    return new Command({
+      update: {
+        messages: [response],
       },
+      goto: END,
+    });
+  } catch (error) {
+    console.error("[chat] 生成回复失败:", error);
+
+    // 返回错误消息
+    const errorMessage = new AIMessage({
+      content:
+        "抱歉，我现在遇到了一些问题。请稍后再试，或者直接告诉我你想要实现的编程任务！",
     });
 
-    return {
-      messages: [fileContextMessage], // 直接添加到消息流
-      pendingFilePaths: [], // 清空待处理队列
-    };
-  } catch (error) {
-    console.error("Failed to process referenced files:", error);
-    return {
-      pendingFilePaths: [], // 清空以避免重复错误
-    };
+    return new Command({
+      update: {
+        messages: [errorMessage],
+      },
+      goto: END,
+    });
   }
-};
+}
 
-//扫描项目结构
-export const injectProjectTreeNode = async (state: AgentState) => {
-  // 如果不需要更新就直接返回
-  if (state.projectTreeInjected) {
-    return {};
-  }
+/**
+ * 初始化节点
+ * 合并了 processReferencedFiles 和 injectProjectTreeNode
+ */
+export async function initializeNode(state: AgentState) {
+  console.log("[initialize] 开始初始化");
 
-  const root = state.projectRoot || ".";
-  const treeText = await project_tree.invoke({
-    root_path: root,
-    max_depth: -1,
-    include_hidden: false,
-    include_files: true,
-    max_entries: 3000,
-  });
+  const updates: Partial<AgentState> = {};
 
-  // 生成唯一的消息ID
-  const messageId = randomUUID();
+  // 1. 处理引用的文件
+  const filePaths = state.pendingFilePaths || [];
+  if (filePaths.length > 0) {
+    try {
+      const projectRoot = state.projectRoot || process.cwd();
+      const { formattedContext } = await attachFilesToContext(
+        filePaths,
+        projectRoot,
+      );
 
-  // 重要修改：不再向messages中添加项目树信息
-  // 只设置projectTreeText变量，让agent函数在需要时智能添加
+      const fileContextMessage = new SystemMessage({
+        content: formattedContext,
+        additional_kwargs: { message_type: "file_context" },
+      });
 
-  return {
-    projectTreeText: treeText,
-    projectTreeInjected: true,
-    projectTreeMessageId: messageId,
-  };
-};
-
-// 生成代码，根据用户意图和上下文
-export const generateCode = async (state: AgentState) => {
-  const { messages, currentTask, codeContext } = state;
-  const programmingLanguage = state.projectProfile?.primaryLanguage || "";
-
-  const promptText = buildCodeWithTestPlanPrompt({
-    currentTask,
-    programmingLanguage,
-    codeContext,
-  });
-
-  const codePrompt = [new SystemMessage({ content: promptText }), ...messages];
-  const response = await baseModel.invoke(codePrompt);
-
-  let testPlanText: string | undefined;
-  if (typeof response.content === "string") {
-    testPlanText = extractTestPlan(response.content);
-  }
-
-  return {
-    messages: [...messages, response],
-    testPlanText: testPlanText ?? state.testPlanText ?? "",
-  };
-};
-
-// 专门生成单元测试的节点
-export const generateTests = async (state: AgentState) => {
-  const {
-    messages,
-    currentTask,
-    codeContext,
-    testPlanText, // 我们在 StateAnnotation 里刚加的那个字段
-  } = state;
-  const programmingLanguage = state.projectProfile?.primaryLanguage || "";
-
-  // 1. 确定“待测代码”
-  let codeUnderTest = (codeContext || "").trim();
-
-  // 如果 codeContext 里没有，就退回去找「最近一条 AI 消息」
-  if (!codeUnderTest) {
-    const lastAiMsg = [...messages].reverse().find((m) => m.type === "ai");
-    if (lastAiMsg && typeof lastAiMsg.content === "string") {
-      codeUnderTest = lastAiMsg.content;
+      updates.messages = [fileContextMessage];
+      updates.pendingFilePaths = [];
+      console.log(`[initialize] 处理了 ${filePaths.length} 个文件`);
+    } catch (error) {
+      console.error("[initialize] 文件处理失败:", error);
+      updates.pendingFilePaths = [];
     }
   }
 
-  // 兜底：实在找不到，就让模型基于任务描述设计测试
-  if (!codeUnderTest) {
-    codeUnderTest =
-      "（当前上下文中没有明确的实现代码，可根据任务描述和函数约定设计测试。）";
-  }
+  // 2. 扫描项目树（如果还没扫描）
+  if (!state.projectTreeInjected) {
+    try {
+      const root = state.projectRoot || ".";
+      const treeText = await project_tree.invoke({
+        root_path: root,
+        max_depth: -1,
+        include_hidden: false,
+        include_files: true,
+        max_entries: 3000,
+      });
 
-  // 2. 构造 Prompt —— 把之前的测试计划（如果有）一起传进去
-  const promptArgs = {
-    currentTask,
-    programmingLanguage,
-    codeUnderTest,
-    existingTestPlan: testPlanText,
-  } as Parameters<typeof buildUnitTestOnlyPrompt>[0];
-
-  const promptText = buildUnitTestOnlyPrompt(promptArgs);
-
-  const systemMsg = new SystemMessage({ content: promptText });
-
-  const response = await baseModel.invoke([systemMsg]);
-
-  return {
-    messages: [...messages, response],
-  };
-};
-
-// 审查代码，判断是否符合要求
-export const reviewCode = async (state: AgentState) => {
-  const { messages, currentTask, retryCount } = state;
-  const programmingLanguage = state.projectProfile?.primaryLanguage || "";
-
-  const lastAIMessage = [...messages]
-    .reverse()
-    .find((msg) => msg.type === "ai");
-  if (!lastAIMessage) {
-    throw new Error("No AI-generated code found for review");
-  }
-  const generatedCode = lastAIMessage.content as string;
-  const structuredModel = baseModel.withStructuredOutput(CodeReviewSchema);
-  const { system, human } = buildReviewPrompt({
-    currentTask,
-    programmingLanguage,
-    generatedCode,
-  });
-  const reviewPrompt = [
-    new SystemMessage({ content: system }),
-    new HumanMessage({ content: human }),
-  ];
-  const reviewResult = await structuredModel.invoke(reviewPrompt);
-  const isPass = reviewResult.decision === "pass";
-  if (isPass) {
-    return {
-      reviewResult: "pass",
-      retryCount,
-    };
-  } else {
-    const newRetryCount = retryCount + 1;
-    if (newRetryCount >= MAX_RETRIES) {
-      console.warn("Max retries reached. Accepting current code.");
-      return {
-        reviewResult: "pass", // 强制通过，避免死循环
-        retryCount: newRetryCount,
-      };
+      updates.projectTreeText = treeText;
+      updates.projectTreeInjected = true;
+      console.log("[initialize] 项目树扫描完成");
+    } catch (error) {
+      console.error("[initialize] 项目树扫描失败:", error);
     }
-    return {
-      reviewResult: "fail",
-      retryCount: newRetryCount,
-    };
   }
-};
 
-// 创建 ToolNode 实例
-const baseToolNode = new ToolNode(tools);
+  // 路由到意图分类
+  return new Command({
+    update: updates,
+    goto: "classifier",
+  });
+}
 
-// 包装 ToolNode，在执行后重置项目树标志
-export const toolNode = async (state: AgentState) => {
-  // 执行工具调用
-  const result = await baseToolNode.invoke(state);
+/**
+ * 规划节点
+ * 合并了 projectPlannerNode 和 taskPlannerNode
+ */
+export async function plannerNode(state: AgentState) {
+  console.log("[planner] 开始规划");
 
-  // 重置项目树注入标志，以便下次 agent 调用时重新获取最新的项目结构
-  return {
-    ...result,
-    projectTreeInjected: false,
-  };
-};
+  // 如果已经有 todos 且还有未完成的任务，跳过规划
+  if (
+    state.todos &&
+    state.todos.length > 0 &&
+    state.currentTodoIndex < state.todos.length
+  ) {
+    console.log("[planner] 已有未完成的任务列表，跳过规划");
+    return new Command({
+      update: { taskStatus: "executing" as const },
+      goto: "executor",
+    });
+  }
 
-export async function projectPlannerNode(
-  state: AgentState,
-): Promise<Partial<AgentState>> {
   const lastUser = state.messages[state.messages.length - 1];
   const projectRoot = state.projectRoot || ".";
 
-  const system = new SystemMessage({
+  // 1. 项目规划
+  console.log("[planner] 生成项目规划");
+  const projectPlanSystem = new SystemMessage({
     content: [
-      "你是架构规划助手，只负责决定技术栈和项目结构，不负责拆细粒度 ToDo。",
-      "你需要输出结构化结果：projectPlanText, techStackSummary, projectInitSteps。",
-      "projectInitSteps 必须是可以直接执行的工程级初始化步骤（例如：创建项目、安装依赖、生成配置文件、初始化样式框架等）。",
-      "不要输出额外说明或自由文本，严格按结构化格式返回。",
+      "你是架构规划助手，只负责决定技术栈和项目结构。",
+      "输出结构化结果：projectPlanText, techStackSummary, projectInitSteps。",
+      "projectInitSteps 必须是可以直接执行的工程级初始化步骤。",
     ].join("\n"),
   });
 
-  const user = new HumanMessage({
+  const projectPlanUser = new HumanMessage({
     content: [
       `项目根目录：\`${projectRoot}\``,
       "用户需求：",
-      "--------------------------------",
       lastUser?.content ?? "",
-      "--------------------------------",
     ].join("\n"),
   });
 
-  const structured = baseModel.withStructuredOutput(ProjectPlanSchema);
-  const res = await structured.invoke([system, user]);
+  const structuredModel = baseModel.withStructuredOutput(ProjectPlanSchema);
+  const projectPlan = await structuredModel.invoke([
+    projectPlanSystem,
+    projectPlanUser,
+  ]);
 
-  // 兼容性处理：确保字段存在
-  const projectPlanText =
-    (res.projectPlanText as string) || String(res.projectPlanText || "");
-  const techStackSummary = (res.techStackSummary as string) || "";
-  const projectInitSteps = Array.isArray(res.projectInitSteps)
-    ? res.projectInitSteps
+  const projectPlanText = String(projectPlan.projectPlanText || "");
+  const techStackSummary = String(projectPlan.techStackSummary || "");
+  const projectInitSteps = Array.isArray(projectPlan.projectInitSteps)
+    ? projectPlan.projectInitSteps
     : [];
 
-  // 把可读的计划文本写回消息流（不要直接 push 结构化对象）
-  const snapshot = `PROJECT_PLANNER_SNAPSHOT:\nprojectInitSteps=${projectInitSteps.length}, techStackSummary=${techStackSummary.slice(0, 100)}, planPreview=${projectPlanText.slice(0, 200)}`;
-  return {
-    messages: [
-      ...state.messages,
-      new SystemMessage({ content: projectPlanText }),
-      new SystemMessage({ content: snapshot }),
-    ],
-    projectPlanText,
-    techStackSummary,
-    projectInitSteps,
-  } as Partial<import("./state.js").AgentState>;
-}
-
-export async function taskPlannerNode(
-  state: AgentState,
-): Promise<Partial<AgentState>> {
-  const lastUser = state.messages[state.messages.length - 1];
-  const projectPlan = state.projectPlanText ?? "";
-  const initSteps = state.projectInitSteps ?? [];
-
-  const system = new SystemMessage({
+  // 2. 任务拆解
+  console.log("[planner] 生成任务列表");
+  const taskPlanSystem = new SystemMessage({
     content: [
-      "你是开发任务拆解助手，负责生成详细、可直接执行的 ToDo 列表。",
-      "任务描述必须详细具体，包含：1)具体目标 2)操作步骤 3)验收标准 4)预期成果。",
-      "前几条任务必须覆盖上游提供的 projectInitSteps（不允许遗漏），并对这些步骤进行详细描述和扩展。",
-      "确保每个任务描述足够清晰，让执行agent一看就知道要做什么、如何做、以及完成标准是什么。",
-      "任务粒度要适中，避免过于简单或过于复杂的任务描述。",
+      "你是开发任务拆解助手，负责生成高效、可执行的任务列表。",
+      "",
+      "**重要原则**:",
+      "1. 生成大粒度任务 - 每个任务应该完成一个完整的功能模块",
+      "2. 任务数量控制在3-5个 - 避免过度拆分",
+      "3. 每个任务应该包含多个相关的小步骤",
+      "4. 任务描述要具体明确，包含目标和验收标准",
+      "",
+      "**示例**:",
+      "❌ 错误: 创建HTML文件 → 添加head标签 → 添加body标签 → 添加样式 (过度拆分)",
+      "✅ 正确: 创建完整的HTML页面，包含结构、样式和交互功能",
+      "",
       "只输出结构化字段 todos（string[]）。",
     ].join("\n"),
   });
 
-  const user = new HumanMessage({
+  const taskPlanUser = new HumanMessage({
     content: [
-      "===== 项目规划文档 =====",
-      projectPlan,
+      "===== 项目规划 =====",
+      projectPlanText,
       "",
-      "===== 上游提供的工程级前置步骤 projectInitSteps =====",
-      initSteps.map((s: string, i: number) => `${i + 1}. ${s}`).join("\n"),
+      "===== 初始化步骤 =====",
+      projectInitSteps.map((s, i) => `${i + 1}. ${s}`).join("\n"),
       "",
-      "===== 用户原始需求 =====",
+      "===== 用户需求 =====",
       lastUser?.content ?? "",
-      "",
-      "请根据以上信息生成一个有序的 ToDo 列表（todos 字段）。每个任务描述必须包含：",
-      "1. 明确的任务目标 - 说明这个任务要实现什么",
-      "2. 具体的操作步骤 - 如何完成这个任务",
-      "3. 明确的验收标准 - 如何判断任务已完成",
-      "4. 预期输出成果 - 完成后会产生什么",
-      "",
-      "前几条任务必须覆盖并详细描述所有 projectInitSteps，每个任务描述长度建议在50-150字之间。",
     ].join("\n"),
   });
+  const taskModel = baseModel.withStructuredOutput(TaskPlanSchema);
+  const taskPlan = await taskModel.invoke([taskPlanSystem, taskPlanUser]);
 
-  const structured = baseModel.withStructuredOutput(TaskPlanSchema);
-  const res = await structured.invoke([system, user]);
+  const todos = Array.isArray(taskPlan.todos) ? taskPlan.todos : [];
 
-  const todos = Array.isArray(res.todos) ? res.todos : [];
+  console.log(`[planner] 生成了 ${todos.length} 个任务`);
 
-  // 把 todos 写入消息流以便下游能看到最新的文本消息
-  const todosText = todos.length
-    ? `ToDos:\n${todos.map((t: string, i: number) => `${i + 1}. ${t}`).join("\n")}`
-    : "";
-  return {
-    messages: [
-      ...state.messages,
-      new SystemMessage({ content: todosText || "(无 ToDo)" }),
-    ],
-    todos,
-    currentTodoIndex: 0,
-    currentTask: "根据 ToDo 列表逐条完成开发任务",
-  } as Partial<import("./state.js").AgentState>;
+  return new Command({
+    update: {
+      messages: [
+        new SystemMessage({ content: projectPlanText }),
+        new SystemMessage({ content: `生成了 ${todos.length} 个任务` }),
+      ],
+      projectPlanText,
+      techStackSummary,
+      projectInitSteps,
+      todos,
+      currentTodoIndex: 0,
+      taskStatus: "executing" as const,
+    },
+    goto: "executor",
+  });
 }
+/**
+ * 执行节点
+ * 核心的 agent 逻辑，使用 Command 进行路由
+ */
+export async function executorNode(state: AgentState) {
+  console.log("[executor] 开始执行");
 
-// 自定义工具执行器：直接执行模型请求的 tool_calls，并把结果或错误作为消息写回 state
-export const toolExecutor = async (state: AgentState) => {
-  const messages = state.messages || [];
-  const lastMessage = messages[messages.length - 1];
-  const outMsgs: SystemMessage[] = [];
-
-  if (!lastMessage || !AIMessage.isInstance(lastMessage)) {
-    return {};
-  }
-
-  const toolCalls: ToolCall[] = Array.isArray(
-    (lastMessage as { tool_calls?: unknown }).tool_calls,
-  )
-    ? ((lastMessage as { tool_calls?: ToolCall[] }).tool_calls ?? [])
-    : [];
-  if (!toolCalls.length) return {};
-
-  for (const call of toolCalls) {
-    const name = call.name;
-    const rawArgs = call.args || {};
-    const sanitizedArgs: Record<string, unknown> = { ...rawArgs };
-    let skipCall = false;
-
-    // 遍历 args，检测可能的路径参数并强制为绝对路径或报错
-    const strict = process.env.STRICT_ABSOLUTE_PATHS === "true";
-    const projectRootBase =
-      (state.projectRoot && path.resolve(state.projectRoot)) || process.cwd();
-
-    const isPathKey = (k: string) =>
-      /\b(?:path|file|dir|directory|workingDir|workingDirectory|file_path|filePath|target)\b/i.test(
-        k,
-      );
-
-    for (const key of Object.keys(rawArgs)) {
-      if (!isPathKey(key)) continue;
-      const raw = rawArgs[key];
-      if (typeof raw !== "string" || raw.trim() === "") continue;
-      // 如果已经是绝对路径，校验是否越界
-      if (path.isAbsolute(raw)) {
-        const resolved = path.resolve(raw);
-        const rp = projectRootBase.toLowerCase();
-        const rp2 = resolved.toLowerCase();
-        if (!rp2.startsWith(rp)) {
-          // 路径逃出 projectRoot
-          outMsgs.push(
-            new SystemMessage({
-              content: `路径参数拒绝：${key} -> ${raw}（不得超出 projectRoot: ${projectRootBase}）`,
-            }),
-          );
-          skipCall = true;
-          continue;
-        }
-        // 合法，继续
-        sanitizedArgs[key] = resolved;
-        continue;
-      }
-
-      // 非绝对路径
-      if (strict) {
-        outMsgs.push(
-          new SystemMessage({
-            content: `路径参数必须为绝对路径：${key} -> ${raw}. 请提供以盘符或 '/' 开头的绝对路径。`,
-          }),
-        );
-        skipCall = true;
-        continue;
-      }
-
-      // 非严格模式：把相对路径解析到 projectRoot 下，并阻止越界
-      const resolved = path.resolve(projectRootBase, raw);
-      const rp = projectRootBase.toLowerCase();
-      const rp2 = resolved.toLowerCase();
-      if (!rp2.startsWith(rp)) {
-        outMsgs.push(
-          new SystemMessage({
-            content: `解析后的路径超出 projectRoot：${key} -> ${resolved}（原始：${raw}）。已拒绝。`,
-          }),
-        );
-        skipCall = true;
-        continue;
-      }
-      sanitizedArgs[key] = resolved;
-    }
-
-    if (skipCall) {
-      outMsgs.push(
-        new SystemMessage({
-          content: `工具 ${name} 已被跳过，请修正路径参数后重试。`,
-        }),
-      );
-      continue;
-    }
-
-    // 查找对应工具实例
-    const tool = (tools as ToolLike[]).find(
-      (t) => t && (t.name === name || t.metadata?.name === name),
-    );
-    if (!tool || typeof tool.func !== "function") {
-      outMsgs.push(new SystemMessage({ content: `工具未找到: ${name}` }));
-      continue;
-    }
-
-    try {
-      // 调用工具：把 state.projectRoot 放入 config.configurable 里，便于工具获取
-      const config = {
-        configurable: { projectRoot: state.projectRoot },
-      } as Record<string, unknown>;
-      const result = await tool.func?.(sanitizedArgs, config);
-      outMsgs.push(
-        new SystemMessage({
-          content: `工具 ${name} 执行成功：\n${String(result)}`,
-        }),
-      );
-    } catch (err) {
-      const errMsg =
-        typeof err === "string" ? err : (err as Error)?.message || String(err);
-      outMsgs.push(
-        new SystemMessage({ content: `工具 ${name} 执行失败：\n${errMsg}` }),
-      );
-    }
-  }
-
-  if (outMsgs.length === 0) return {};
-
-  // 关键优化：每次工具执行后，强制重置项目目录注入标志为false
-  // 这样下次agent调用前会重新获取最新的项目结构
-  return {
-    messages: [...messages, ...outMsgs],
-    projectTreeInjected: false,
-  };
-};
-
-export const agent = async (state: AgentState) => {
   const {
     messages,
-    summary,
-    projectProfile,
-    testPlanText,
     todos = [],
     currentTodoIndex = 0,
-    currentTask,
+    iterationCount = 0,
+    maxIterations = 50,
     projectTreeText,
+    summary,
   } = state;
 
+  // 循环保护 - 更严格的检测
+  if (iterationCount >= maxIterations) {
+    console.error(`[executor] 达到最大迭代次数 ${maxIterations}，强制结束`);
+    return new Command({
+      update: {
+        error: `达到最大迭代次数 ${maxIterations}`,
+        taskStatus: "completed" as const,
+      },
+      goto: END,
+    });
+  }
+
+  // 检查是否所有任务完成
+  if (todos.length > 0 && currentTodoIndex >= todos.length) {
+    console.log("[executor] 所有任务已完成");
+    return new Command({
+      update: {
+        taskStatus: "completed" as const,
+        messages: [new SystemMessage({ content: "所有任务已完成！" })],
+      },
+      goto: END,
+    });
+  }
+
+  // 检测重复消息 - 防止循环
+  const lastMessages = messages.slice(-5);
+  const lastAIMessages = lastMessages.filter(
+    (m) =>
+      m &&
+      (m.constructor.name === "AIMessage" || (m as any)._getType?.() === "ai"),
+  );
+
+  // 检查最近的AI消息是否重复
+  if (lastAIMessages.length >= 2) {
+    const lastContent = String(
+      lastAIMessages[lastAIMessages.length - 1]?.content || "",
+    );
+    const prevContent = String(
+      lastAIMessages[lastAIMessages.length - 2]?.content || "",
+    );
+
+    // 如果最近两条AI消息内容相似（前50个字符相同），可能陷入循环
+    if (
+      lastContent.substring(0, 50) === prevContent.substring(0, 50) &&
+      lastContent.length > 10
+    ) {
+      console.warn(`[executor] 检测到重复AI回复，可能陷入循环`);
+
+      // 强制推进到下一个任务
+      if (todos.length > 0) {
+        const nextIndex = currentTodoIndex + 1;
+        if (nextIndex >= todos.length) {
+          console.log(`[executor] 所有任务已完成（循环检测触发）`);
+          return new Command({
+            update: {
+              taskStatus: "completed" as const,
+              iterationCount: 0,
+            },
+            goto: END,
+          });
+        }
+
+        console.log(`[executor] 强制推进到任务 ${nextIndex + 1}`);
+        return new Command({
+          update: {
+            currentTodoIndex: nextIndex,
+            iterationCount: 0,
+          },
+          goto: "executor",
+        });
+      }
+    }
+  }
+
+  // 构建上下文消息
   const contextMessages: SystemMessage[] = [];
 
-  // 1. 添加项目结构信息（如果有），限制大小以避免上下文过大
+  // 添加项目树（限制大小）
   if (projectTreeText && projectTreeText.trim()) {
-    // 限制项目树文本的大小，避免上下文超限
-    const maxTreeLength = 5000; // 设置合理的最大长度
-    const truncatedTreeText =
+    const maxTreeLength = 5000;
+    const truncatedTree =
       projectTreeText.length > maxTreeLength
-        ? projectTreeText.substring(0, maxTreeLength) +
-          "\n...（项目结构过大，已截断）"
+        ? projectTreeText.substring(0, maxTreeLength) + "\n...（已截断）"
         : projectTreeText;
 
     contextMessages.push(
       new SystemMessage({
-        content: `## 当前项目结构\n\n${truncatedTreeText}\n`,
+        content: `## 项目结构\n\n${truncatedTree}\n`,
       }),
     );
   }
 
-  // 2. 当前要做的 Todo / 任务 - 重点增强任务专注度
-  const todoFromList = todos[currentTodoIndex];
-  const effectiveTask = todoFromList || currentTask; // 优先用 todo 列表里的
-  const totalTasks = todos.length;
-  const currentTaskNumber = currentTodoIndex + 1;
+  // 添加当前任务信息
+  if (todos.length > 0 && currentTodoIndex < todos.length) {
+    const currentTask = todos[currentTodoIndex];
+    const taskNumber = currentTodoIndex + 1;
+    const totalTasks = todos.length;
 
-  if (effectiveTask) {
     contextMessages.push(
       new SystemMessage({
-        content:
-          `你是一个专注执行任务的开发助手。\n` +
-          `==========================\n` +
-          `📋 当前任务 (${currentTaskNumber}/${totalTasks}):\n` +
-          `「${effectiveTask}」\n` +
-          `==========================\n` +
-          `重要说明:\n` +
-          `- 你的唯一目标是完成当前任务，不要处理其他任务\n` +
-          `- 任务列表由 taskPlannerNode 生成，你必须严格按照计划执行\n` +
-          `- 任务完成后自然结束回复，工作流会自动推进到下一个任务\n` +
-          `- 如果遇到问题无法完成，明确说明原因\n` +
-          `- 可以使用工具来完成任务，如创建/修改文件、运行命令等\n` +
-          `\n请直接开始执行当前任务，不要询问用户确认。`,
+        content: [
+          `你是一个高效的开发助手，专注于完成任务。`,
+          `==========================`,
+          `📋 当前任务 (${taskNumber}/${totalTasks}):`,
+          `「${currentTask}」`,
+          `==========================`,
+          ``,
+          `**执行规则**:`,
+          `1. 直接执行任务，使用必要的工具（如 write_file, read_file 等）`,
+          `2. 完成后必须明确说"✅ 任务完成"`,
+          `3. 不要询问用户是否需要帮助`,
+          `4. 不要说"如果你需要..."之类的话`,
+          `5. 一次性完成整个任务，不要分步骤`,
+          `6. 如果任务需要创建文件，必须调用 write_file 工具`,
+          ``,
+          `**禁止的回复**:`,
+          `❌ "如果你需要进一步的帮助..."`,
+          `❌ "请告诉我..."`,
+          `❌ "还有什么我可以帮你的吗？"`,
+          `❌ 不调用工具就说任务完成`,
+          ``,
+          `**正确的回复**:`,
+          `✅ 先调用工具完成实际操作`,
+          `✅ 然后说"✅ 任务完成。已创建XXX文件..."`,
+          ``,
+          `现在开始执行任务！必须调用工具来完成任务！`,
+        ].join("\n"),
       }),
+    );
+
+    console.log(
+      `[executor] 当前任务 (${taskNumber}/${totalTasks}): ${currentTask.substring(0, 50)}...`,
     );
   }
 
-  // 添加任务列表概览，帮助agent了解全局进度
-  if (todos.length > 0) {
-    const todoSummary = `## 任务列表概览\n${todos
-      .map(
-        (todo, idx) =>
-          `${idx === currentTodoIndex ? "🔄" : idx < currentTodoIndex ? "✅" : "⬜"} ${idx + 1}. ${todo}`,
-      )
-      .join("\n")}\n\n你现在正在执行任务 ${currentTaskNumber}。`;
-
-    contextMessages.push(new SystemMessage({ content: todoSummary }));
-  }
-
-  // 2. 添加摘要（如果有）
+  // 添加摘要
   if (summary) {
     contextMessages.push(
       new SystemMessage({
-        content:
-          `对话摘要：\n${summary}\n\n` + `请基于此摘要和最新消息生成响应。`,
+        content: `对话摘要：\n${summary}`,
       }),
     );
   }
 
-  // 3. 添加项目信息（如果有）
-  if (projectProfile) {
-    contextMessages.push(
-      new SystemMessage({
-        content:
-          `项目信息：\n` +
-          `- 主要语言: ${projectProfile.primaryLanguage}\n` +
-          `- 测试框架: ${projectProfile.testFrameworkHint || "未知"}\n\n` +
-          `请生成符合项目风格的代码和文件操作，尽量沿用既有风格。`,
-      }),
-    );
-  }
+  // 合并所有消息 - 只保留最近的消息避免上下文过大
+  const recentMessages = messages.slice(-20); // 只保留最近20条消息
+  const fullMessages = [...contextMessages, ...recentMessages];
 
-  // 4. 添加测试计划（如果有）
-  if (testPlanText) {
-    contextMessages.push(
-      new SystemMessage({
-        content:
-          `当前测试计划摘要：\n${testPlanText}\n\n` +
-          `请确保生成的代码和文件操作有利于通过这些测试。`,
-      }),
-    );
-  }
+  // 调用模型
+  console.log(
+    `[executor] 调用模型（迭代 ${iterationCount + 1}/${maxIterations}）`,
+  );
+  const response = await modelWithTools.invoke(fullMessages);
 
-  // 5. 合并消息并调用模型
-  const fullMessages = [...contextMessages, ...messages];
-  // 如果 state 指定了 projectRoot，临时切换进程工作目录
-  const originalCwd = process.cwd();
-  try {
-    if (state.projectRoot) {
-      try {
-        process.chdir(state.projectRoot);
-      } catch (err) {
-        console.warn(`无法切换到 projectRoot: ${state.projectRoot} - ${err}`);
-      }
-    }
-    const response = await modelWithTools.invoke(fullMessages);
-    // 恢复 cwd
-    try {
-      process.chdir(originalCwd);
-    } catch (err) {
-      console.warn("Failed to restore cwd:", err);
-    }
-    return {
-      messages: [...messages, response],
-      currentTask: effectiveTask,
-    };
-  } finally {
-    try {
-      process.chdir(originalCwd);
-    } catch (err) {
-      console.warn("Failed to restore cwd:", err);
-    }
-  }
-};
+  const newIterationCount = iterationCount + 1;
 
-// 节点：推进当前 todo 索引（在工具执行后调用）
-export const advanceTodo = async (state: AgentState) => {
-  const todos = state.todos || [];
-  const currentTodoIndex = state.currentTodoIndex ?? 0;
-  if (todos.length === 0) return {};
-  // 如果已经到末尾则不再推进
-  if (currentTodoIndex >= todos.length) return {};
-  return {
-    currentTodoIndex: currentTodoIndex + 1,
-  };
-};
+  // 决定路由
 
-// 优化后的humanReviewNode实现
-export const humanReviewNode = async (state: AgentState) => {
-  const messages = state.messages;
-  const lastMessage = messages[messages.length - 1];
+  // 1. 如果有工具调用 - 这是正常的执行路径
+  if (response.tool_calls?.length) {
+    const toolNames = response.tool_calls.map((t) => t.name).join(", ");
+    console.log(`[executor] 检测到工具调用: ${toolNames}`);
 
-  // 分析待审批的工具调用
-  if (
-    lastMessage &&
-    AIMessage.isInstance(lastMessage) &&
-    lastMessage.tool_calls?.length
-  ) {
-    const sensitiveCalls = lastMessage.tool_calls.filter((tool) =>
+    const hasSensitive = response.tool_calls.some((tool) =>
       SENSITIVE_TOOLS.includes(tool.name),
     );
 
-    console.log("=== 人工审批请求 ===");
-    console.log(`待审批工具调用: ${sensitiveCalls.length} 个`);
+    // 检查是否为演示模式
+    const demoMode = state.demoMode || false;
 
-    // 详细显示每个敏感工具调用的信息
-    sensitiveCalls.forEach((call, index) => {
-      console.log(`\n工具 ${index + 1}: ${call.name}`);
-      console.log(`参数: ${JSON.stringify(call.args, null, 2)}`);
-
-      // 为文件操作提供额外说明
-      if (call.name.includes("file") || call.name.includes("code")) {
-        console.log("这是一个文件操作，可能会修改项目文件结构。");
-      }
-    });
-
-    console.log("\n=== 审批完成，继续执行 ===\n");
-  }
-
-  // 可以添加对状态的修改逻辑，例如记录审批时间等
-  return {};
-};
-
-export function parseTodos(planText: string): string[] {
-  const lines = planText.split("\n");
-
-  const start = lines.findIndex((line) =>
-    line.trim().startsWith("## 开发 ToDo 列表"),
-  );
-  if (start === -1) return [];
-
-  const todos: string[] = [];
-  for (let i = start + 1; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmed = line.trim();
-
-    // 碰到下一个标题就结束
-    if (trimmed.startsWith("## ")) break;
-
-    // 只收列表项
-    if (/^[-•\d.]/.test(trimmed)) {
-      const cleaned = trimmed.replace(/^[-•\d.\s]+/, "").trim();
-      if (cleaned) todos.push(cleaned);
+    if (hasSensitive && !demoMode) {
+      console.log(`[executor] 包含敏感工具，需要人工审批`);
+      return new Command({
+        update: {
+          messages: [response],
+          pendingToolCalls: response.tool_calls,
+          iterationCount: newIterationCount,
+        },
+        goto: "review",
+      });
     }
-  }
 
-  return todos;
-}
+    if (hasSensitive && demoMode) {
+      console.log(`[executor] 演示模式: 自动批准敏感工具`);
+    } else {
+      console.log(`[executor] 普通工具，直接执行`);
+    }
 
-export async function plannerNode(
-  state: AgentState,
-): Promise<Partial<AgentState>> {
-  // 兼容旧的 plannerNode：改为顺序调用新的 project & task planner
-  const projectRes = await projectPlannerNode(state as AgentState);
-  const intermediateState = { ...state, ...projectRes } as AgentState;
-  const taskRes = await taskPlannerNode(intermediateState as AgentState);
-
-  return {
-    ...projectRes,
-    ...taskRes,
-  };
-}
-
-/**
- * 意图分类节点
- * 分析用户输入，判断是编程任务还是闲聊，并路由到相应的处理节点
- */
-export async function intentClassifierNode(
-  state: AgentState,
-): Promise<Command> {
-  console.log("[intent_classifier] 开始分析用户意图...");
-
-  try {
-    // 获取最后一条用户消息
-    const lastMessage = state.messages[state.messages.length - 1];
-    const userInput =
-      typeof lastMessage.content === "string" ? lastMessage.content : "";
-
-    console.log(
-      `[intent_classifier] 用户输入: ${userInput.substring(0, 100)}...`,
-    );
-
-    // 使用结构化输出确保返回格式正确
-    const structuredModel = baseModel.withStructuredOutput(IntentSchema);
-
-    // 调用 LLM 进行意图分类
-    const classification = await structuredModel.invoke([
-      new SystemMessage({ content: buildIntentClassificationPrompt() }),
-      lastMessage,
-    ]);
-
-    console.log(
-      `[intent_classifier] 分类结果: ${classification.intent} (置信度: ${classification.confidence})`,
-    );
-    console.log(`[intent_classifier] 分类理由: ${classification.reasoning}`);
-
-    // 决定路由目标
-    const goto =
-      classification.intent === "task" ? "project_planner" : "chat_agent";
-    console.log(`[intent_classifier] 路由到: ${goto}`);
-
-    // 使用 Command 对象同时更新状态和路由
     return new Command({
       update: {
-        userIntent: classification.intent,
-        intentConfidence: classification.confidence,
-        conversationMode: classification.intent,
+        messages: [response],
+        pendingToolCalls: response.tool_calls,
+        iterationCount: newIterationCount,
       },
-      goto,
-    });
-  } catch (error) {
-    console.error("[intent_classifier] 分类失败，默认为 chat 模式:", error);
-
-    // 错误处理：默认为 chat 模式，提供友好体验
-    return new Command({
-      update: {
-        userIntent: "chat",
-        intentConfidence: 0,
-        conversationMode: "chat",
-      },
-      goto: "chat_agent",
+      goto: "tools",
     });
   }
-}
 
-/**
- * 闲聊代理节点
- * 处理闲聊对话，生成友好的响应
- */
-export async function chatAgentNode(
-  state: AgentState,
-): Promise<Partial<AgentState>> {
-  console.log("[chat_agent] 开始生成闲聊响应...");
+  // 2. 没有工具调用 - 检查任务是否完成
+  const content = String(response.content || "").toLowerCase();
 
-  try {
-    // 构建闲聊提示词
-    const chatPrompt = [
-      new SystemMessage({ content: buildChatAgentPrompt() }),
-      ...state.messages,
-    ];
+  // 更严格的任务完成判断
+  const hasCompletionKeyword =
+    content.includes("任务完成") ||
+    content.includes("已完成") ||
+    content.includes("完成了") ||
+    content.includes("task completed") ||
+    content.includes("completed") ||
+    /✅/.test(String(response.content || ""));
 
-    // 调用 LLM 生成响应
-    const response = await baseModel.invoke(chatPrompt);
+  // 检测无用的询问式回复
+  const isAskingForHelp =
+    content.includes("如果你需要") ||
+    content.includes("if you need") ||
+    content.includes("请告诉我") ||
+    content.includes("let me know") ||
+    content.includes("还有什么") ||
+    content.includes("需要帮助");
 
-    console.log(
-      `[chat_agent] 响应生成成功: ${typeof response.content === "string" ? response.content.substring(0, 100) : ""}...`,
-    );
+  // 检测是否真的执行了任务（通过检查是否有工具执行结果在消息中）
+  const hasToolResults = messages.some(
+    (m) =>
+      m &&
+      ((m as any)._getType?.() === "tool" ||
+        m.constructor.name === "ToolMessage"),
+  );
 
-    // 返回更新后的消息历史
-    return {
+  // 任务完成的条件：
+  // 1. 有完成关键词 且 之前有工具执行结果
+  // 2. 或者迭代次数超过阈值（防止无限循环）
+  const taskReallyCompleted = hasCompletionKeyword && hasToolResults;
+  const stuckInLoop = newIterationCount >= 3 && !response.tool_calls?.length;
+
+  if ((taskReallyCompleted || stuckInLoop) && todos.length > 0) {
+    const nextIndex = currentTodoIndex + 1;
+    const allDone = nextIndex >= todos.length;
+
+    if (stuckInLoop && !taskReallyCompleted) {
+      console.log(
+        `[executor] 检测到循环（无工具调用），强制完成任务 ${currentTodoIndex + 1}`,
+      );
+    } else {
+      console.log(`[executor] 任务 ${currentTodoIndex + 1} 完成`);
+    }
+
+    if (allDone) {
+      console.log(`[executor] 所有任务已完成`);
+      return new Command({
+        update: {
+          messages: [response],
+          currentTodoIndex: nextIndex,
+          taskCompleted: true,
+          taskStatus: "completed" as const,
+          iterationCount: 0,
+        },
+        goto: END,
+      });
+    }
+
+    console.log(`[executor] 继续下一个任务`);
+    return new Command({
+      update: {
+        messages: [response],
+        currentTodoIndex: nextIndex,
+        taskCompleted: true,
+        iterationCount: 0, // 重置计数
+      },
+      goto: "executor",
+    });
+  }
+
+  // 3. 如果是询问式回复，不添加到消息中，直接重试
+  if (isAskingForHelp) {
+    console.log(`[executor] 检测到询问式回复，重试`);
+    return new Command({
+      update: {
+        iterationCount: newIterationCount,
+      },
+      goto: "executor",
+    });
+  }
+
+  // 4. 继续当前任务
+  console.log(`[executor] 继续处理当前任务`);
+  return new Command({
+    update: {
       messages: [response],
-    };
-  } catch (error) {
-    console.error("[chat_agent] 响应生成失败:", error);
+      iterationCount: newIterationCount,
+    },
+    goto: "executor",
+  });
+}
+/**
+ * 工具执行节点
+ */
+const toolsNodeBase = new ToolNode(tools);
 
-    // 错误处理：返回友好的错误消息
-    return {
-      messages: [
-        new AIMessage({
-          content:
-            "抱歉，我现在遇到了一些问题。请稍后再试，或者直接告诉我你想做什么项目！",
-        }),
-      ],
-    };
+export async function toolsNode(state: AgentState) {
+  console.log("[tools] 执行工具");
+
+  try {
+    // 执行工具
+    const result = await toolsNodeBase.invoke(state);
+
+    console.log("[tools] 工具执行完成");
+
+    // 返回到 executor
+    return new Command({
+      update: {
+        ...result,
+        projectTreeInjected: false, // 重置，下次重新扫描
+      },
+      goto: "executor",
+    });
+  } catch (error) {
+    console.error("[tools] 工具执行失败:", error);
+
+    return new Command({
+      update: {
+        messages: [
+          new SystemMessage({
+            content: `工具执行失败: ${error}`,
+          }),
+        ],
+      },
+      goto: "executor",
+    });
   }
+}
+
+/**
+ * 人工审批节点
+ */
+export async function reviewNode(state: AgentState) {
+  console.log("[review] 等待人工审批");
+
+  const { pendingToolCalls = [] } = state;
+
+  console.log("=== 人工审批请求 ===");
+  console.log(`待审批工具: ${pendingToolCalls.length} 个`);
+
+  pendingToolCalls.forEach((call, index) => {
+    console.log(`\n工具 ${index + 1}: ${call.name}`);
+    console.log(`参数: ${JSON.stringify(call.args, null, 2)}`);
+  });
+
+  console.log("\n=== 审批完成，继续执行 ===\n");
+
+  // 这里会被 interruptBefore 中断
+  // 用户批准后继续到 tools
+
+  return new Command({
+    update: {},
+    goto: "tools",
+  });
 }
