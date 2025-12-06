@@ -12,7 +12,6 @@ import {
     AgentState,
     ISessionManager
 } from './types.js';
-import { BaseMessage } from '@langchain/core/messages';
 
 /**
  * 增强版会话管理器 - 带文件锁机制
@@ -263,47 +262,6 @@ export class SessionManagerWithLock implements ISessionManager {
         });
     }
 
-    /**
-     * 从消息创建历史记录
-     *
-     * 说明：纯函数，无副作用，不需要锁保护
-     */
-    createHistoryFromMessage(
-        message: BaseMessage,
-        eventType: 'user_message' | 'ai_response'
-    ): Omit<HistoryRecord, 'timestamp'> {
-        // 纯函数，直接委托给基础实现
-        return this.sessionManager.createHistoryFromMessage(message, eventType);
-    }
-
-    /**
-     * 创建工具调用历史记录
-     *
-     * 说明：纯函数，无副作用，不需要锁保护
-     */
-    createToolCallHistory(
-        toolName: string,
-        args: Record<string, any>,
-        result?: any,
-        error?: string
-    ): Omit<HistoryRecord, 'timestamp'> {
-        // 纯函数，直接委托给基础实现
-        return this.sessionManager.createToolCallHistory(toolName, args, result, error);
-    }
-
-    /**
-     * 创建系统总结历史记录
-     *
-     * 说明：纯函数，无副作用，不需要锁保护
-     */
-    createSummarizeHistory(
-        oldCount: number,
-        newCount: number,
-        summary: string
-    ): Omit<HistoryRecord, 'timestamp'> {
-        // 纯函数，直接委托给基础实现
-        return this.sessionManager.createSummarizeHistory(oldCount, newCount, summary);
-    }
 
     /**
      * 获取锁状态（用于调试和监控）

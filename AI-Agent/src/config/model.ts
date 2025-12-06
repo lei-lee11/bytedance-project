@@ -1,15 +1,13 @@
-import "dotenv/config";
+import 'dotenv/config';
 import { ChatOpenAI } from "@langchain/openai";
-import { ChatDeepSeek } from "@langchain/deepseek";
 import { tools } from "../utils/tools/index.ts";
 
 // 从环境变量读取 API Key 与可选的模型/基础 URL，避免在代码中硬编码敏感信息。
 const arkApiKey = process.env.ARK_API_KEY || process.env.OPENAI_API_KEY || "";
-const arkBaseURL =
-  process.env.ARK_BASE_URL || "https://ark.cn-beijing.volces.com/api/v3";
-const arkModel = process.env.ARK_MODEL || "doubao-seed-1-6-251015";
+const arkBaseURL = process.env.ARK_BASE_URL || "https://ark.cn-beijing.volces.com/api/v3";
+const arkModel = process.env.ARK_MODEL || "doubao-seed-1-6-thinking-250715";
 
-export const baseModel = new ChatDeepSeek({
+export const baseModel = new ChatOpenAI({
   model: arkModel,
   temperature: 0,
   //streaming: false,

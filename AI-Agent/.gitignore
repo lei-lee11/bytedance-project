@@ -21,7 +21,5 @@ dist
 # LangGraph API
 .langgraph_api
 
-file_operation.test.ts
+data
 
-.idea/
-document

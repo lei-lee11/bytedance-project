@@ -33,8 +33,6 @@ export interface SessionMetadata {
   message_count: number;
   last_checkpoint?: string;
   status: 'active' | 'archived';
-  programming_language?: string;
-  summary?: string;
 }
 
 // 检查点记录（仅支持 AgentState）
@@ -167,19 +165,4 @@ export interface ISessionManager {
   restoreSession(threadId: string): Promise<void>;
   getSessionStats(threadId: string): Promise<any>;
   generateSessionTitle(threadId: string): Promise<string>;
-  createHistoryFromMessage(
-    message: BaseMessage,
-    eventType: 'user_message' | 'ai_response'
-  ): Omit<HistoryRecord, 'timestamp'>;
-  createToolCallHistory(
-    toolName: string,
-    args: Record<string, any>,
-    result?: any,
-    error?: string
-  ): Omit<HistoryRecord, 'timestamp'>;
-  createSummarizeHistory(
-    oldCount: number,
-    newCount: number,
-    summary: string
-  ): Omit<HistoryRecord, 'timestamp'>;
 }

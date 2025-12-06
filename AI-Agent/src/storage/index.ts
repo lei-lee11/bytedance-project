@@ -239,27 +239,17 @@ export class StorageSystem {
    */
   async cleanup(options: {
     olderThanDays?: number;
-    maxHistoryRecords?: number;
-    maxCheckpoints?: number;
-    deleteArchived?: boolean;
   } = {}): Promise<{
     sessionsCleaned: number;
-    historyRecordsDeleted: number;
-    checkpointsDeleted: number;
     spaceFreed: number;
   }> {
     this.ensureInitialized();
 
     const {
       olderThanDays = 30,
-      maxHistoryRecords = 1000,
-      maxCheckpoints = 50,
-      deleteArchived = false
     } = options;
 
     let sessionsCleaned = 0;
-    let historyRecordsDeleted = 0;
-    let checkpointsDeleted = 0;
     let spaceFreed = 0;
 
     const sessionList = await this.sessionManager.listSessions();
@@ -270,30 +260,12 @@ export class StorageSystem {
       const threadId = metadata.thread_id;
 
       // 检查是否需要删除归档会话
-      if (deleteArchived && metadata.status === 'archived') {
+      if (metadata.status === 'archived') {
         const stats = await this.fileManager.getSessionStats(threadId);
         spaceFreed += stats.size;
         await this.sessionManager.deleteSession(threadId);
         sessionsCleaned++;
         continue;
-      }
-
-      // 清理历史记录
-      if (sessionInfo.historyCount > maxHistoryRecords) {
-        const historyResult = await this.historyManager.cleanupHistory(
-          threadId,
-          olderThanDays,
-          true // 保留高优先级记录
-        );
-        historyRecordsDeleted += historyResult.deleted;
-      }
-
-      // 清理检查点 - 使用 SessionManager 的基本清理功能
-      if (sessionInfo.checkpointCount > maxCheckpoints) {
-        // 简单的检查点数量限制，通过文件管理器直接清理
-        await this.fileManager.cleanupOldCheckpoints(threadId, maxCheckpoints);
-        checkpointsDeleted += Math.max(0, sessionInfo.checkpointCount - maxCheckpoints);
-        spaceFreed += Math.max(0, sessionInfo.checkpointCount - maxCheckpoints) * 2048; // 估算大小
       }
 
       // 对于长时间未更新的会话进行归档
@@ -305,8 +277,6 @@ export class StorageSystem {
 
     return {
       sessionsCleaned,
-      historyRecordsDeleted,
-      checkpointsDeleted,
       spaceFreed
     };
   }
