@@ -1,16 +1,12 @@
 import { LANGUAGE_CONFIGS } from "./languageConfig.ts";
 import { detectProjectLanguage, findAvailableTestCommand } from "./testRunner.ts";
-import type { ProjectProfile } from "../../agent/state.ts";
+import type { ProjectProfile } from "../../storage/types.ts";
 
 export async function buildProjectProfile(cwd: string): Promise<ProjectProfile> {
   const languages = await detectProjectLanguage(cwd);
   const detectedLanguages = languages;
 
-  let primary: ProjectProfile["primaryLanguage"] = "Other";
-  if (languages.includes("typescript")) primary = "TypeScript";
-  else if (languages.includes("javascript")) primary = "JavaScript";
-  else if (languages.includes("python")) primary = "Python";
-
+  // 移除primaryLanguage，因为ProjectProfile中不再包含此字段
   const langForTest = languages.find((lang) => LANGUAGE_CONFIGS[lang]);
   let testCommand: string | null = null;
   let testFrameworkHint: string | undefined;
@@ -31,7 +27,6 @@ export async function buildProjectProfile(cwd: string): Promise<ProjectProfile> 
 
   return {
     detectedLanguages,
-    primaryLanguage: primary,
     testCommand: testCommand ?? undefined,
     testFrameworkHint,
   };

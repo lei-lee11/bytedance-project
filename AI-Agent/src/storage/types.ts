@@ -3,7 +3,6 @@ import { BaseMessage } from "@langchain/core/messages";
 // 项目/用户画像类型，用于描述项目内使用的语言和测试命令提示
 export interface ProjectProfile {
   detectedLanguages: string[];
-  primaryLanguage: "TypeScript" | "JavaScript" | "Python" | "Other";
   testCommand?: string;
   testFrameworkHint?: string;
 }
@@ -11,17 +10,23 @@ export interface ProjectProfile {
 // 完整的 Agent 状态（与 agent/state.ts 中的 AgentState 保持一致）
 export interface AgentState {
   messages: BaseMessage[];
-  summary?: string;
-  currentTask?: string;
-  codeContext?: string;
-  retryCount: number;
-  reviewResult?: string;
-  projectRoot?: string;
-  projectTreeMessageId?: string;
+  summary: string;
+  projectRoot: string;
   projectTreeInjected: boolean;
-  projectTreeText?: string;
-  testPlanText?: string;
-  projectProfile?: ProjectProfile;
+  projectTreeText: string;
+  projectPlanText: string;
+  techStackSummary: string;
+  projectInitSteps: string[];
+  todos: string[];
+  currentTodoIndex: number;
+  pendingFilePaths: string[];
+  taskStatus: "planning" | "executing" | "completed";
+  taskCompleted: boolean;
+  iterationCount: number;
+  maxIterations: number;
+  pendingToolCalls: any[];
+  error: string;
+  demoMode: boolean;
 }
 
 // 会话元数据

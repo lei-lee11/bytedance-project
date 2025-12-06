@@ -1,4 +1,3 @@
-import { StorageSystem } from "../storage/index.js";
 import { LangGraphStorageAdapter } from "../storage/langgraphAdapter.js";
 import { storage, initPromise } from "../storage/instance.ts";
 /**

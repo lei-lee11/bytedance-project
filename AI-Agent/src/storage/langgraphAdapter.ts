@@ -37,16 +37,22 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
             channel_values: {
                 messages: state.messages,
                 summary: state.summary || "",
-                currentTask: state.currentTask || "",
-                codeContext: state.codeContext || "",
-                retryCount: state.retryCount,
-                reviewResult: state.reviewResult || "",
                 projectRoot: state.projectRoot || "",
-                projectTreeMessageId: state.projectTreeMessageId || "",
                 projectTreeInjected: state.projectTreeInjected,
                 projectTreeText: state.projectTreeText || "",
-                testPlanText: state.testPlanText || "",
-                projectProfile: state.projectProfile || undefined
+                projectPlanText: state.projectPlanText || "",
+                techStackSummary: state.techStackSummary || "",
+                projectInitSteps: state.projectInitSteps || [],
+                todos: state.todos || [],
+                currentTodoIndex: state.currentTodoIndex || 0,
+                pendingFilePaths: state.pendingFilePaths || [],
+                taskStatus: state.taskStatus || "planning",
+                taskCompleted: state.taskCompleted || false,
+                iterationCount: state.iterationCount || 0,
+                maxIterations: state.maxIterations || 50,
+                pendingToolCalls: state.pendingToolCalls || [],
+                error: state.error || "",
+                demoMode: state.demoMode || false
             },
             channel_versions: {}, // 可以添加版本控制逻辑
             versions_seen: {}, // 可以添加版本跟踪逻辑
@@ -75,14 +81,14 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
 
             // 检查消息ID是否重复
             if (messageId && seenIds.has(messageId)) {
-                console.log(`🔄 跳过重复消息ID: ${messageId}`);
+                // console.log(`🔄 跳过重复消息ID: ${messageId}`);
                 continue;
             }
 
             // 检查消息内容是否重复（针对没有ID的情况）
             const contentHash = messageContent.length > 20 ? messageContent.substring(0, 20) : messageContent;
             if (!messageId && seenContents.has(contentHash)) {
-                console.log(`🔄 跳过重复内容: ${messageContent.substring(0, 50)}...`);
+                // console.log(`🔄 跳过重复内容: ${messageContent.substring(0, 50)}...`);
                 continue;
             }
 
@@ -95,7 +101,7 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
             deduplicated.push(message);
         }
 
-        console.log(`🧹 消息去重: ${messages.length} -> ${deduplicated.length}`);
+        // console.log(`🧹 消息去重: ${messages.length} -> ${deduplicated.length}`);
         return deduplicated;
     }
 
@@ -143,22 +149,22 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
             if (messageType === 'HumanMessage' || messageType === 'human') {
                 if (!savedUserMessages.has(content)) {
                     newMessages.push(message);
-                    console.log(`🆕 新用户消息: ${content.substring(0, 50)}...`);
+                    // console.log(`🆕 新用户消息: ${content.substring(0, 50)}...`);
                 } else {
-                    console.log(`🔄 跳过已保存的用户消息: ${content.substring(0, 50)}...`);
+                    // console.log(`🔄 跳过已保存的用户消息: ${content.substring(0, 50)}...`);
                 }
             } else if (messageType === 'AIMessage' || messageType === 'ai') {
                 // AI消息使用消息ID来检测重复，而不是内容
                 const messageId = (message as any).id;
                 if (messageId && !savedAIMessages.has(messageId)) {
                     newMessages.push(message);
-                    console.log(`🆕 新AI回复: ${messageId} - ${content.substring(0, 50)}...`);
+                    // console.log(`🆕 新AI回复: ${messageId} - ${content.substring(0, 50)}...`);
                 } else if (!messageId && !savedAIMessages.has(content)) {
                     // 如果没有消息ID，回退到使用内容检测
                     newMessages.push(message);
-                    console.log(`🆕 新AI回复 (无ID): ${content.substring(0, 50)}...`);
+                    // console.log(`🆕 新AI回复 (无ID): ${content.substring(0, 50)}...`);
                 } else {
-                    console.log(`🔄 跳过已保存的AI回复: ${messageId || content.substring(0, 50)}...`);
+                    // console.log(`🔄 跳过已保存的AI回复: ${messageId || content.substring(0, 50)}...`);
                 }
             } else if (messageType === 'ToolMessage' || messageType === 'tool') {
                 // 检查工具消息是否已经保存过
@@ -168,9 +174,9 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
 
                 if (!savedToolMessages.has(toolKey)) {
                     newMessages.push(message);
-                    console.log(`🆕 新工具消息: ${toolName}...`);
+                    // console.log(`🆕 新工具消息: ${toolName}...`);
                 } else {
-                    console.log(`🔄 跳过已保存的工具消息: ${toolName}...`);
+                    // console.log(`🔄 跳过已保存的工具消息: ${toolName}...`);
                 }
             } else {
                 // 其他类型的消息直接保存
@@ -194,12 +200,12 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
             const isRemoveMessage = this.isRemoveMessage(msg);
 
             if (isRemoveMessage && msg.id) {
-                console.log(`🗑️ 检测到删除消息操作: ID=${msg.id}`);
+                // console.log(`🗑️ 检测到删除消息操作: ID=${msg.id}`);
                 idsToRemove.add(msg.id);
                 // 从结果中移除已存在的旧消息
                 for (let i = result.length - 1; i >= 0; --i) {
                     if (result[i] && result[i].id === msg.id) {
-                        console.log(`🗑️ 删除消息: ${result[i].constructor.name}(${msg.id})`);
+                        // console.log(`🗑️ 删除消息: ${result[i].constructor.name}(${msg.id})`);
                         result.splice(i, 1);
                     }
                 }
@@ -208,20 +214,20 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
 
             // 普通消息：如果其 id 在待删集合中，则忽略；否则追加
             if (msg?.id && idsToRemove.has(msg.id)) {
-                console.log(`🔄 跳过已删除的消息: ID=${msg.id}`);
+                // console.log(`🔄 跳过已删除的消息: ID=${msg.id}`);
                 continue;
             }
 
             // 确保是 BaseMessage 类型才添加
             if (this.isBaseMessage(msg)) {
                 result.push(msg);
-                console.log(`➕ 添加消息: ${msg.constructor.name}(${msg.id || 'no-id'})`);
+                // console.log(`➕ 添加消息: ${msg.constructor.name}(${msg.id || 'no-id'})`);
             } else {
                 console.warn(`⚠️ 跳过非 BaseMessage 对象:`, msg?.constructor?.name);
             }
         }
 
-        console.log(`📊 消息处理结果: ${currentMessages.length} -> ${result.length} (删除了 ${idsToRemove.size} 条消息)`);
+        // console.log(`📊 消息处理结果: ${currentMessages.length} -> ${result.length} (删除了 ${idsToRemove.size} 条消息)`);
         return result;
     }
 
@@ -359,11 +365,11 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
         const newMessages = await this.getNewMessages(threadId, deduplicatedMessages);
 
         if (newMessages.length === 0) {
-            console.log(`💾 没有新消息需要保存`);
+            // console.log(`💾 没有新消息需要保存`);
             return;
         }
 
-        console.log(`💾 保存历史记录: 准备保存 ${newMessages.length} 条新消息 (总消息数: ${deduplicatedMessages.length})`);
+        // console.log(`💾 保存历史记录: 准备保存 ${newMessages.length} 条新消息 (总消息数: ${deduplicatedMessages.length})`);
 
         for (const message of newMessages) {
             try {
@@ -389,17 +395,17 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
                 // 对于有工具调用的消息，即使content为空也要保存
                 const hasToolCalls = (message as any).tool_calls && Array.isArray((message as any).tool_calls);
                 if (!message.content && !hasToolCalls) {
-                    console.warn(`⚠️ 跳过空内容且无工具调用的消息:`, {
-                        type: messageType,
-                        content: message.content,
-                        id: messageId
-                    });
+                    // console.warn(`⚠️ 跳过空内容且无工具调用的消息:`, {
+                    //     type: messageType,
+                    //     content: message.content,
+                    //     id: messageId
+                    // });
                     continue;
                 }
 
                 if (messageType === 'humanmessage' || messageType === 'human') {
                     // 用户消息 - 高优先级
-                    console.log(`👤 保存用户消息: ${message.content?.toString().substring(0, 50)}...`);
+                    // console.log(`👤 保存用户消息: ${message.content?.toString().substring(0, 50)}...`);
                     await this.storage.history.addHistoryRecord(threadId, {
                         event_type: 'user_message',
                         content: message.content as string,
@@ -420,9 +426,9 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
                     // 如果历史记录中只有一条用户消息（即当前刚保存的这条），生成智能标题
                     if (updatedUserHistory.length === 1) {
                         try {
-                            console.log(`🎯 检测到第一条用户消息，开始生成智能标题...`);
-                            const smartTitle = await this.storage.sessions.generateSessionTitle(threadId);
-                            console.log(`✨ 生成的智能标题: ${smartTitle}`);
+                            // console.log(`🎯 检测到第一条用户消息，开始生成智能标题...`);
+                            await this.storage.sessions.generateSessionTitle(threadId);
+                            // console.log(`✨ 生成的智能标题: ${smartTitle}`);
                         } catch (titleError) {
                             console.warn(`⚠️ 生成智能标题失败:`, titleError);
                             // 不影响主要功能，继续执行
@@ -431,15 +437,15 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
                 } else if (messageType === 'aimessage' || messageType === 'ai') {
                     // AI 响应 - 高优先级
                     const messageContent = message.content?.toString() || '';
-                    const hasToolCalls = (message as any).tool_calls && Array.isArray((message as any).tool_calls);
+                    // const hasToolCalls = (message as any).tool_calls && Array.isArray((message as any).tool_calls);
+                    //
+                    // // 为 AI 消息选择合适的内容描述
+                    // let displayContent = messageContent;
+                    // if (!messageContent && hasToolCalls) {
+                    //     displayContent = "AI 工具调用请求（无文本内容）";
+                    // }
 
-                    // 为 AI 消息选择合适的内容描述
-                    let displayContent = messageContent;
-                    if (!messageContent && hasToolCalls) {
-                        displayContent = "AI 工具调用请求（无文本内容）";
-                    }
-
-                    console.log(`🤖 保存AI回复: ${displayContent.substring(0, 50)}...`);
+                    // console.log(`🤖 保存AI回复: ${displayContent.substring(0, 50)}...`);
                     await this.storage.history.addHistoryRecord(threadId, {
                         event_type: 'ai_response',
                         content: messageContent,
@@ -488,7 +494,7 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
                     });
                 } else {
                     // 其他有效类型的消息 - 中优先级（但不保存无效的Object类型）
-                    console.log(`📝 保存其他类型消息 (${messageType}): ${message.content?.toString().substring(0, 50)}...`);
+                    // console.log(`📝 保存其他类型消息 (${messageType}): ${message.content?.toString().substring(0, 50)}...`);
                     if (message.content && message.content.toString().trim() !== '') {
                         await this.storage.history.addHistoryRecord(threadId, {
                             event_type: 'ai_response',
@@ -517,17 +523,23 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
         const values = checkpoint.channel_values;
         return {
             messages: values.messages as BaseMessage[] || [],
-            summary: values.summary as string,
-            currentTask: values.currentTask as string,
-            codeContext: values.codeContext as string,
-            retryCount: values.retryCount as number || 0,
-            reviewResult: values.reviewResult as string,
-            projectRoot: values.projectRoot as string,
-            projectTreeMessageId: values.projectTreeMessageId as string,
+            summary: values.summary as string || "",
+            projectRoot: values.projectRoot as string || "",
             projectTreeInjected: values.projectTreeInjected as boolean || false,
-            projectTreeText: values.projectTreeText as string,
-            testPlanText: values.testPlanText as string,
-            projectProfile: values.projectProfile as any
+            projectTreeText: values.projectTreeText as string || "",
+            projectPlanText: values.projectPlanText as string || "",
+            techStackSummary: values.techStackSummary as string || "",
+            projectInitSteps: values.projectInitSteps as string[] || [],
+            todos: values.todos as string[] || [],
+            currentTodoIndex: values.currentTodoIndex as number || 0,
+            pendingFilePaths: values.pendingFilePaths as string[] || [],
+            taskStatus: values.taskStatus as "planning" | "executing" | "completed" || "planning",
+            taskCompleted: values.taskCompleted as boolean || false,
+            iterationCount: values.iterationCount as number || 0,
+            maxIterations: values.maxIterations as number || 50,
+            pendingToolCalls: values.pendingToolCalls as any[] || [],
+            error: values.error as string || "",
+            demoMode: values.demoMode as boolean || false
         };
     }
 
@@ -560,7 +572,7 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
             let sessionInfo = await this.storage.sessions.getSessionInfo(threadId);
 
             if (!sessionInfo) {
-                console.log(`🔧 为 threadId ${threadId} 创建新会话`);
+                // console.log(`🔧 为 threadId ${threadId} 创建新会话`);
                 // 直接使用传入的 threadId，而不是让 createSession 生成新ID
                 const now = Date.now();
                 const metadata: SessionMetadata = {
@@ -580,13 +592,13 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
                     checkpointCount: 0,
                     historyCount: 0
                 };
-                console.log(`✅ 会话创建成功: ${threadId}`);
+                // console.log(`✅ 会话创建成功: ${threadId}`);
             } else {
-                console.log(`📋 使用现有会话: ${threadId}`);
-
+                // console.log(`📋 使用现有会话: ${threadId}`);
+                const metadata1 = sessionInfo.metadata
                 // 自动激活归档会话
-                if (sessionInfo.metadata.status === 'archived') {
-                    console.log(`🔄 自动激活归档会话: ${threadId}`);
+                if (metadata1.status === 'archived') {
+                    // console.log(`🔄 自动激活归档会话: ${threadId}`);
                     await this.storage.sessions.restoreSession(threadId);
                 }
             }
@@ -599,7 +611,7 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
             const previousMessageCount = userMessages.length + aiMessages.length;
 
             // 直接使用文件管理器保存检查点，避免通过 SessionManager.saveCheckpoint
-            console.log(`💾 直接保存检查点: ${checkpoint.id}`);
+            // console.log(`💾 直接保存检查点: ${checkpoint.id}`);
             await this.storage.files.appendCheckpoint(threadId, {
                 timestamp: Date.now(),
                 thread_id: threadId,
@@ -616,7 +628,7 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
             }
 
             // 直接更新会话元数据文件
-            console.log(`📝 更新会话元数据`);
+            // console.log(`📝 更新会话元数据`);
             const existingMetadata = await this.storage.files.readMetadata(threadId);
             if (existingMetadata) {
                 const updatedMetadata = {
@@ -626,7 +638,7 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
                     message_count: state.messages ? state.messages.length : 0
                 };
                 await this.storage.files.writeMetadata(threadId, updatedMetadata);
-                console.log(`✅ 会话元数据更新成功，消息数量: ${updatedMetadata.message_count}`);
+                // console.log(`✅ 会话元数据更新成功，消息数量: ${updatedMetadata.message_count}`);
             } else {
                 console.warn(`⚠️ 会话元数据不存在，跳过更新`);
             }
@@ -667,16 +679,22 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
                 currentState = {
                     messages: [],
                     summary: "",
-                    currentTask: "",
-                    codeContext: "",
-                    retryCount: 0,
-                    reviewResult: "",
                     projectRoot: process.cwd(),
-                    projectTreeMessageId: "",
                     projectTreeInjected: false,
                     projectTreeText: "",
-                    testPlanText: "",
-                    projectProfile: undefined
+                    projectPlanText: "",
+                    techStackSummary: "",
+                    projectInitSteps: [],
+                    todos: [],
+                    currentTodoIndex: 0,
+                    pendingFilePaths: [],
+                    taskStatus: "planning" as const,
+                    taskCompleted: false,
+                    iterationCount: 0,
+                    maxIterations: 50,
+                    pendingToolCalls: [],
+                    error: "",
+                    demoMode: false
                 };
             }
 
@@ -685,13 +703,13 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
             // 将写入操作应用到状态
             for (const [channel, value] of writes) {
                 if (channel === "messages" && Array.isArray(value)) {
-                    console.log(`🔄 处理消息写入: 接收到 ${value.length} 条消息 (包含可能的 RemoveMessage)`);
+                    // console.log(`🔄 处理消息写入: 接收到 ${value.length} 条消息 (包含可能的 RemoveMessage)`);
 
                     // 🔑 关键修改：使用新的消息Reducer处理添加和删除
                     const processedMessages = this.applyMessagesReducer(updatedState.messages, value);
                     updatedState.messages = processedMessages;
 
-                    console.log(`📝 消息处理完成: 最终状态包含 ${updatedState.messages.length} 条消息`);
+                    // console.log(`📝 消息处理完成: 最终状态包含 ${updatedState.messages.length} 条消息`);
                 } else {
                     // 更新其他通道值
                     (updatedState as any)[channel] = value;
@@ -729,7 +747,7 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
         // 确保会话存在
         const sessionInfo = await this.storage.sessions.getSessionInfo(threadId);
         if (!sessionInfo) {
-            console.log(`🔧 在 putWrites 中为 threadId ${threadId} 创建新会话`);
+            // console.log(`🔧 在 putWrites 中为 threadId ${threadId} 创建新会话`);
             const now = Date.now();
             const sessionMetadata: SessionMetadata = {
                 thread_id: threadId,
@@ -744,13 +762,13 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
             const metadata = sessionInfo.metadata;
             // 自动激活归档会话
             if (metadata.status === 'archived') {
-                console.log(`🔄 自动激活归档会话 (putWrites): ${threadId}`);
+                // console.log(`🔄 自动激活归档会话 (putWrites): ${threadId}`);
                 await this.storage.sessions.restoreSession(threadId);
             }
         }
 
         // 直接保存检查点
-        console.log(`💾 直接保存检查点 (putWrites): ${checkpoint.id}`);
+        // console.log(`💾 直接保存检查点 (putWrites): ${checkpoint.id}`);
         await this.storage.files.appendCheckpoint(threadId, {
             timestamp: Date.now(),
             thread_id: threadId,
@@ -775,7 +793,7 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
                 message_count: actualMessageCount
             };
             await this.storage.files.writeMetadata(threadId, updatedMetadata);
-            console.log(`✅ 会话元数据更新成功 (putWrites)`);
+            // console.log(`✅ 会话元数据更新成功 (putWrites)`);
         }
     }
 
