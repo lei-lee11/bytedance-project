@@ -15,16 +15,19 @@ import {
   buildCodeWithTestPlanPrompt,
   buildUnitTestOnlyPrompt,
   buildReviewPrompt,
+  buildIntentClassificationPrompt,
+  buildChatAgentPrompt,
 } from "./prompt.ts";
 import { AgentState } from "./state.js";
 import { baseModel, modelWithTools } from "../config/model.js";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
-// import { Command } from "@langchain/langgraph";
+import { Command } from "@langchain/langgraph";
 import { z } from "zod";
 // 简单的代码审查结构化输出 schema，供 reviewCode 节点使用（避免导入时 ReferenceError）
+// 注意：OpenAI structured output 要求所有字段必须是 required 或使用 .nullable()
 const CodeReviewSchema = z.object({
   decision: z.enum(["pass", "fail"]),
-  issues: z.string().optional(),
+  issues: z.string().nullable().default(""),
 });
 
 // 从模型生成的文本中尝试提取测试计划（简单实现：查找 '### Step 2' 后的内容）
@@ -56,15 +59,29 @@ type ToolCall = {
 };
 
 // 结构化输出 schema：project planner
+// 注意：OpenAI structured output 要求所有字段必须是 required 或使用 .nullable()
+// 不能使用 .optional()，参考：https://platform.openai.com/docs/guides/structured-outputs
 const ProjectPlanSchema = z.object({
   projectPlanText: z.string(),
-  techStackSummary: z.string().optional(),
-  projectInitSteps: z.array(z.string()).optional(),
+  techStackSummary: z.string().nullable().default(""),
+  projectInitSteps: z
+    .array(z.string())
+    .nullable()
+    .default(() => []),
 });
 
 // 结构化输出 schema：task planner（返回 todos 列表）
 const TaskPlanSchema = z.object({
   todos: z.array(z.string()),
+});
+
+// 结构化输出 schema：intent classification（意图分类）
+const IntentSchema = z.object({
+  intent: z
+    .enum(["task", "chat"])
+    .describe("用户意图类型：task=编程任务, chat=闲聊"),
+  confidence: z.number().min(0).max(1).describe("分类置信度，0-1之间"),
+  reasoning: z.string().describe("分类理由"),
 });
 import { attachFilesToContext } from "../utils/tools/fileContext.js";
 
@@ -178,12 +195,16 @@ export const injectProjectTreeNode = async (state: AgentState) => {
     max_entries: 3000,
   });
 
+  // 生成唯一的消息ID
+  const messageId = randomUUID();
+
   // 重要修改：不再向messages中添加项目树信息
   // 只设置projectTreeText变量，让agent函数在需要时智能添加
 
   return {
     projectTreeText: treeText,
     projectTreeInjected: true,
+    projectTreeMessageId: messageId,
   };
 };
 
@@ -303,7 +324,20 @@ export const reviewCode = async (state: AgentState) => {
   }
 };
 
-export const toolNode = new ToolNode(tools);
+// 创建 ToolNode 实例
+const baseToolNode = new ToolNode(tools);
+
+// 包装 ToolNode，在执行后重置项目树标志
+export const toolNode = async (state: AgentState) => {
+  // 执行工具调用
+  const result = await baseToolNode.invoke(state);
+
+  // 重置项目树注入标志，以便下次 agent 调用时重新获取最新的项目结构
+  return {
+    ...result,
+    projectTreeInjected: false,
+  };
+};
 
 export async function projectPlannerNode(
   state: AgentState,
@@ -767,4 +801,108 @@ export async function plannerNode(
     ...projectRes,
     ...taskRes,
   };
+}
+
+/**
+ * 意图分类节点
+ * 分析用户输入，判断是编程任务还是闲聊，并路由到相应的处理节点
+ */
+export async function intentClassifierNode(
+  state: AgentState,
+): Promise<Command> {
+  console.log("[intent_classifier] 开始分析用户意图...");
+
+  try {
+    // 获取最后一条用户消息
+    const lastMessage = state.messages[state.messages.length - 1];
+    const userInput =
+      typeof lastMessage.content === "string" ? lastMessage.content : "";
+
+    console.log(
+      `[intent_classifier] 用户输入: ${userInput.substring(0, 100)}...`,
+    );
+
+    // 使用结构化输出确保返回格式正确
+    const structuredModel = baseModel.withStructuredOutput(IntentSchema);
+
+    // 调用 LLM 进行意图分类
+    const classification = await structuredModel.invoke([
+      new SystemMessage({ content: buildIntentClassificationPrompt() }),
+      lastMessage,
+    ]);
+
+    console.log(
+      `[intent_classifier] 分类结果: ${classification.intent} (置信度: ${classification.confidence})`,
+    );
+    console.log(`[intent_classifier] 分类理由: ${classification.reasoning}`);
+
+    // 决定路由目标
+    const goto =
+      classification.intent === "task" ? "project_planner" : "chat_agent";
+    console.log(`[intent_classifier] 路由到: ${goto}`);
+
+    // 使用 Command 对象同时更新状态和路由
+    return new Command({
+      update: {
+        userIntent: classification.intent,
+        intentConfidence: classification.confidence,
+        conversationMode: classification.intent,
+      },
+      goto,
+    });
+  } catch (error) {
+    console.error("[intent_classifier] 分类失败，默认为 chat 模式:", error);
+
+    // 错误处理：默认为 chat 模式，提供友好体验
+    return new Command({
+      update: {
+        userIntent: "chat",
+        intentConfidence: 0,
+        conversationMode: "chat",
+      },
+      goto: "chat_agent",
+    });
+  }
+}
+
+/**
+ * 闲聊代理节点
+ * 处理闲聊对话，生成友好的响应
+ */
+export async function chatAgentNode(
+  state: AgentState,
+): Promise<Partial<AgentState>> {
+  console.log("[chat_agent] 开始生成闲聊响应...");
+
+  try {
+    // 构建闲聊提示词
+    const chatPrompt = [
+      new SystemMessage({ content: buildChatAgentPrompt() }),
+      ...state.messages,
+    ];
+
+    // 调用 LLM 生成响应
+    const response = await baseModel.invoke(chatPrompt);
+
+    console.log(
+      `[chat_agent] 响应生成成功: ${typeof response.content === "string" ? response.content.substring(0, 100) : ""}...`,
+    );
+
+    // 返回更新后的消息历史
+    return {
+      messages: [response],
+    };
+  } catch (error) {
+    console.error("[chat_agent] 响应生成失败:", error);
+
+    // 错误处理：返回友好的错误消息
+    return {
+      messages: [
+        new AIMessage({
+          content:
+            "抱歉，我现在遇到了一些问题。请稍后再试，或者直接告诉我你想做什么项目！",
+        }),
+      ],
+    };
+  }
 }

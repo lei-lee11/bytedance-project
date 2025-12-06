@@ -1,8 +1,8 @@
 import * as z from "zod";
 import { tool } from "@langchain/core/tools";
 import type { RunnableConfig } from "@langchain/core/runnables";
-import fs from "fs/promises";
-import path from "path";
+import * as fs from "fs/promises";
+import * as path from "path";
 
 interface FileReadResult {
   success: boolean;
@@ -20,11 +20,11 @@ function getProjectRoot(config?: RunnableConfig): string {
     | string
     | undefined;
 
-  // 强制使用默认项目根目录（用户要求）
+  // 如果未设置 projectRoot，使用当前工作目录
   if (!projectRoot || typeof projectRoot !== 'string' || projectRoot.trim() === '') {
-    const forced = 'C:\\projects\\playground';
-    console.warn(`projectRoot 未设置，强制使用默认根目录：${forced}`);
-    return path.resolve(forced);
+    const currentDir = process.cwd();
+    console.warn(`projectRoot 未设置，使用当前工作目录：${currentDir}`);
+    return currentDir;
   }
 
   return path.resolve(projectRoot);

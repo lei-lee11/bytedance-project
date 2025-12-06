@@ -5,7 +5,7 @@ import { marked } from "marked";
 import TerminalRenderer from "marked-terminal";
 import { HumanMessage, ToolMessage } from "@langchain/core/messages";
 // 🔥 修改 1: 引入 initializeGraph
-import { graph, initializeGraph } from "../agent/graph.js";
+import { graph } from "../agent/graph.js";
 import { Header } from "./components/Header.tsx";
 import { MinimalThinking } from "./components/MinimalThinking.tsx";
 import { ApprovalCard } from "./components/ApprovalCard.tsx";
@@ -87,7 +87,7 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
   useEffect(() => {
     const init = async () => {
       try {
-        await initializeGraph(); // 等待图编译并赋值给全局 graph 变量
+        //await initializeGraph(); // 等待图编译并赋值给全局 graph 变量
         setIsGraphReady(true);
       } catch (err: any) {
         console.error("Graph initialization failed:", err);

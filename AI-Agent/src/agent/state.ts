@@ -83,6 +83,66 @@ export const StateAnnotation = Annotation.Root({
     reducer: (_prev: string[], next: string[]) => next,
     default: () => [],
   }),
+
+  // 新增：任务状态（用于重构后的 graph）
+  taskStatus: Annotation<"planning" | "executing" | "completed">({
+    value: (_prev, next) => next,
+    default: () => "planning" as const,
+  }),
+
+  // 新增：任务完成标记
+  taskCompleted: Annotation<boolean>({
+    value: (_prev, next) => next,
+    default: () => false,
+  }),
+
+  // 新增：迭代计数（循环保护）
+  iterationCount: Annotation<number>({
+    value: (_prev, next) => next,
+    default: () => 0,
+  }),
+
+  // 新增：最大迭代次数
+  maxIterations: Annotation<number>({
+    value: (_prev, next) => next,
+    default: () => 50,
+  }),
+
+  // 新增：待执行的工具调用
+  pendingToolCalls: Annotation<any[]>({
+    value: (_prev, next) => next,
+    default: () => [],
+  }),
+
+  // 新增：错误信息
+  error: Annotation<string>({
+    value: (_prev, next) => next,
+    default: () => "",
+  }),
+
+  // 新增：演示模式（跳过人工审批）
+  demoMode: Annotation<boolean>({
+    value: (_prev, next) => next,
+    default: () => false,
+  }),
+
+  // 新增：用户意图分类（task: 编程任务, chat: 闲聊）
+  userIntent: Annotation<"task" | "chat" | null>({
+    value: (_prev, next) => next ?? null,
+    default: () => null,
+  }),
+
+  // 新增：意图分类置信度
+  intentConfidence: Annotation<number>({
+    value: (_prev, next) => next ?? 0,
+    default: () => 0,
+  }),
+
+  // 新增：对话模式（task: 任务模式, chat: 闲聊模式）
+  conversationMode: Annotation<"task" | "chat" | null>({
+    value: (_prev, next) => next ?? null,
+    default: () => null,
+  }),
 });
 
 export type AgentState = typeof StateAnnotation.State;
@@ -101,8 +161,8 @@ export function createAgentState(
   overrides: Partial<AgentState> = {},
 ): AgentState {
   const base: AgentState = {
-    messages: [],
-    summary: "",
+    messages: [], //
+    summary: "", //
     currentTask: "",
     codeContext: "",
     programmingLanguage: "TypeScript",
@@ -110,16 +170,28 @@ export function createAgentState(
     reviewResult: "",
     projectRoot: overrides.projectRoot ?? "C:\\projects\\playground",
     projectTreeMessageId: "",
-    projectTreeInjected: false,
-    projectTreeText: "",
+    projectTreeInjected: false, //
+    projectTreeText: "", //
     testPlanText: "",
     projectProfile: undefined,
-    projectPlanText: "",
-    techStackSummary: "",
-    projectInitSteps: [],
-    todos: [],
-    currentTodoIndex: 0,
-    pendingFilePaths: [],
+    projectPlanText: "", //
+    techStackSummary: "", //
+    projectInitSteps: [], //
+    todos: [], //
+    currentTodoIndex: 0, //
+    pendingFilePaths: [], //
+    // 新增字段
+    taskStatus: "planning" as const, //
+    taskCompleted: false, //
+    iterationCount: 0, //
+    maxIterations: 50, //
+    pendingToolCalls: [], //
+    error: "", //
+    demoMode: false, //
+    // 意图分类相关字段
+    userIntent: null,
+    intentConfidence: 0,
+    conversationMode: null,
   } as AgentState;
 
   return {

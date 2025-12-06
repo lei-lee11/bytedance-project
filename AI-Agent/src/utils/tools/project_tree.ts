@@ -3,8 +3,8 @@
 // 注意：为了避免遍历过多无关文件，调用方应适当设置 `root_path`、`max_entries` 等参数。
 import * as z from "zod";
 import { tool } from "@langchain/core/tools";
-import fs from "fs/promises";
-import path from "path";
+import * as fs from "fs/promises";
+import * as path from "path";
 
 // 项目目录树工具：返回格式化的项目目录结构（可配置深度与过滤）
  const project_tree = tool(

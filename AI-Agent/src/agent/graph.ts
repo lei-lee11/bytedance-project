@@ -1,305 +1,663 @@
-import { StateGraph, START, END } from "@langchain/langgraph";
-import { AIMessage, SystemMessage } from "@langchain/core/messages";
+import { StateGraph, START, END, Command } from "@langchain/langgraph";
+import {
+  AIMessage,
+  SystemMessage,
+  HumanMessage,
+} from "@langchain/core/messages";
 import { StateAnnotation, AgentState } from "./state.ts";
 import { initializeCheckpointer } from "../config/checkpointer.js";
-import { SENSITIVE_TOOLS } from "../utils/tools/index.ts";
-import {
-  summarizeConversation,
-  toolNode,
-  toolExecutor,
-  agent,
-  humanReviewNode,
-  processReferencedFiles,
-  projectPlannerNode,
-  taskPlannerNode,
-  injectProjectTreeNode,
-} from "./nodes.ts";
+import { SENSITIVE_TOOLS, tools } from "../utils/tools/index.ts";
+import { baseModel, modelWithTools } from "../config/model.js";
+import { ToolNode } from "@langchain/langgraph/prebuilt";
+import { project_tree } from "../utils/tools/project_tree.ts";
+import { attachFilesToContext } from "../utils/tools/fileContext.js";
+import { z } from "zod";
 
-// 延迟初始化的检查点保存器
-let checkpointer: any; // 将动态初始化为 LangGraphStorageAdapter
+// Schema 定义
+const ProjectPlanSchema = z.object({
+  projectPlanText: z.string(),
+  techStackSummary: z.string().nullable().default(""),
+  projectInitSteps: z
+    .array(z.string())
+    .nullable()
+    .default(() => []),
+});
 
-// wrapNode: 在每个节点执行前，把当前节点名写入 state.messages（SystemMessage）并在控制台打印，
-// 这样在运行智能体时可以观察当前执行的是哪个节点。
-function wrapNode<T extends (...args: unknown[]) => unknown>(
-  name: string,
-  fn: T,
-): T {
-  const wrapper = (async (state: AgentState) => {
+const TaskPlanSchema = z.object({
+  todos: z.array(z.string()),
+});
+
+/**
+ * 初始化节点
+ * 合并了 processReferencedFiles 和 injectProjectTreeNode
+ */
+async function initializeNode(state: AgentState) {
+  console.log("[initialize] 开始初始化");
+
+  const updates: Partial<AgentState> = {};
+
+  // 1. 处理引用的文件
+  const filePaths = state.pendingFilePaths || [];
+  if (filePaths.length > 0) {
     try {
-      const note = new SystemMessage({ content: `[node] running: ${name}` });
-      if (Array.isArray(state.messages)) {
-        state.messages.push(note);
-      }
-    } catch (e) {
-      // ignore
+      const projectRoot = state.projectRoot || process.cwd();
+      const { formattedContext } = await attachFilesToContext(
+        filePaths,
+        projectRoot,
+      );
+
+      const fileContextMessage = new SystemMessage({
+        content: formattedContext,
+        additional_kwargs: { message_type: "file_context" },
+      });
+
+      updates.messages = [fileContextMessage];
+      updates.pendingFilePaths = [];
+      console.log(`[initialize] 处理了 ${filePaths.length} 个文件`);
+    } catch (error) {
+      console.error("[initialize] 文件处理失败:", error);
+      updates.pendingFilePaths = [];
     }
-    console.log(`[node] running: ${name}`);
-    return (fn as unknown as (...args: unknown[]) => unknown)(
-      state as unknown as Parameters<T>[0],
-    );
-  }) as unknown as T;
-  return wrapper;
-}
-
-// 创建图实例
-async function routeAgentOutput(state: AgentState) {
-  const messages = state.messages;
-  const lastMessage = messages[messages.length - 1];
-  const todos = state.todos ?? [];
-  const currentTodoIndex = state.currentTodoIndex ?? 0;
-
-  // 获取当前任务描述
-  const currentTask =
-    currentTodoIndex < todos.length ? todos[currentTodoIndex] : "";
-  const currentTaskLower = currentTask.toLowerCase();
-
-  // 添加调试日志，帮助追踪工作流状态
-  console.log(
-    `[路由调试] 当前状态 - todos长度: ${todos.length}, 当前索引: ${currentTodoIndex}`,
-  );
-  if (currentTodoIndex < todos.length) {
-    console.log(`[路由调试] 当前任务: ${todos[currentTodoIndex]}`);
   }
 
-  // 1. 优先检查是否有工具调用
-  if (
-    lastMessage &&
-    AIMessage.isInstance(lastMessage) &&
-    lastMessage.tool_calls?.length
-  ) {
-    console.log(
-      `[路由调试] 检测到工具调用: ${lastMessage.tool_calls?.map((t) => t.name).join(", ")}`,
+  // 2. 扫描项目树（如果还没扫描）
+  if (!state.projectTreeInjected) {
+    try {
+      const root = state.projectRoot || ".";
+      const treeText = await project_tree.invoke({
+        root_path: root,
+        max_depth: -1,
+        include_hidden: false,
+        include_files: true,
+        max_entries: 3000,
+      });
+
+      updates.projectTreeText = treeText;
+      updates.projectTreeInjected = true;
+      console.log("[initialize] 项目树扫描完成");
+    } catch (error) {
+      console.error("[initialize] 项目树扫描失败:", error);
+    }
+  }
+
+  return new Command({
+    update: updates,
+    goto: "planner",
+  });
+}
+
+/**
+ * 规划节点
+ * 合并了 projectPlannerNode 和 taskPlannerNode
+ */
+async function plannerNode(state: AgentState) {
+  console.log("[planner] 开始规划");
+
+  // 如果已经有 todos，跳过规划
+  if (state.todos && state.todos.length > 0) {
+    console.log("[planner] 已有任务列表，跳过规划");
+    return new Command({
+      update: { taskStatus: "executing" as const },
+      goto: "executor",
+    });
+  }
+
+  const lastUser = state.messages[state.messages.length - 1];
+  const projectRoot = state.projectRoot || ".";
+
+  // 1. 项目规划
+  console.log("[planner] 生成项目规划");
+  const projectPlanSystem = new SystemMessage({
+    content: [
+      "你是架构规划助手，只负责决定技术栈和项目结构。",
+      "输出结构化结果：projectPlanText, techStackSummary, projectInitSteps。",
+      "projectInitSteps 必须是可以直接执行的工程级初始化步骤。",
+    ].join("\n"),
+  });
+
+  const projectPlanUser = new HumanMessage({
+    content: [
+      `项目根目录：\`${projectRoot}\``,
+      "用户需求：",
+      lastUser?.content ?? "",
+    ].join("\n"),
+  });
+
+  const structuredModel = baseModel.withStructuredOutput(ProjectPlanSchema);
+  const projectPlan = await structuredModel.invoke([
+    projectPlanSystem,
+    projectPlanUser,
+  ]);
+
+  const projectPlanText = String(projectPlan.projectPlanText || "");
+  const techStackSummary = String(projectPlan.techStackSummary || "");
+  const projectInitSteps = Array.isArray(projectPlan.projectInitSteps)
+    ? projectPlan.projectInitSteps
+    : [];
+
+  // 2. 任务拆解
+  console.log("[planner] 生成任务列表");
+  const taskPlanSystem = new SystemMessage({
+    content: [
+      "你是开发任务拆解助手，负责生成高效、可执行的任务列表。",
+      "",
+      "**重要原则**:",
+      "1. 生成大粒度任务 - 每个任务应该完成一个完整的功能模块",
+      "2. 任务数量控制在3-5个 - 避免过度拆分",
+      "3. 每个任务应该包含多个相关的小步骤",
+      "4. 任务描述要具体明确，包含目标和验收标准",
+      "",
+      "**示例**:",
+      "❌ 错误: 创建HTML文件 → 添加head标签 → 添加body标签 → 添加样式 (过度拆分)",
+      "✅ 正确: 创建完整的HTML页面，包含结构、样式和交互功能",
+      "",
+      "只输出结构化字段 todos（string[]）。",
+    ].join("\n"),
+  });
+
+  const taskPlanUser = new HumanMessage({
+    content: [
+      "===== 项目规划 =====",
+      projectPlanText,
+      "",
+      "===== 初始化步骤 =====",
+      projectInitSteps.map((s, i) => `${i + 1}. ${s}`).join("\n"),
+      "",
+      "===== 用户需求 =====",
+      lastUser?.content ?? "",
+    ].join("\n"),
+  });
+
+  const taskModel = baseModel.withStructuredOutput(TaskPlanSchema);
+  const taskPlan = await taskModel.invoke([taskPlanSystem, taskPlanUser]);
+
+  const todos = Array.isArray(taskPlan.todos) ? taskPlan.todos : [];
+
+  console.log(`[planner] 生成了 ${todos.length} 个任务`);
+
+  return new Command({
+    update: {
+      messages: [
+        new SystemMessage({ content: projectPlanText }),
+        new SystemMessage({ content: `生成了 ${todos.length} 个任务` }),
+      ],
+      projectPlanText,
+      techStackSummary,
+      projectInitSteps,
+      todos,
+      currentTodoIndex: 0,
+      taskStatus: "executing" as const,
+    },
+    goto: "executor",
+  });
+}
+
+/**
+ * 执行节点
+ * 核心的 agent 逻辑，使用 Command 进行路由
+ *
+ * 1. 增强循环检测 - 检测重复的AI回复
+ * 2. 更严格的任务完成判断
+ * 3. 添加消息ID追踪避免重复处理
+ */
+async function executorNode(state: AgentState) {
+  console.log("[executor] 开始执行");
+
+  const {
+    messages,
+    todos = [],
+    currentTodoIndex = 0,
+    iterationCount = 0,
+    maxIterations = 50,
+    projectTreeText,
+    summary,
+  } = state;
+
+  // 循环保护 - 更严格的检测
+  if (iterationCount >= maxIterations) {
+    console.error(`[executor] 达到最大迭代次数 ${maxIterations}，强制结束`);
+    return new Command({
+      update: {
+        error: `达到最大迭代次数 ${maxIterations}`,
+        taskStatus: "completed" as const,
+      },
+      goto: END,
+    });
+  }
+
+  // 检查是否所有任务完成
+  if (todos.length > 0 && currentTodoIndex >= todos.length) {
+    console.log("[executor] 所有任务已完成");
+    return new Command({
+      update: {
+        taskStatus: "completed" as const,
+        messages: [new SystemMessage({ content: "所有任务已完成！" })],
+      },
+      goto: END,
+    });
+  }
+
+  // 检测重复消息 - 防止循环
+  const lastMessages = messages.slice(-5);
+  const lastAIMessages = lastMessages.filter(
+    (m) =>
+      m &&
+      (m.constructor.name === "AIMessage" || (m as any)._getType?.() === "ai"),
+  );
+
+  // 检查最近的AI消息是否重复
+  if (lastAIMessages.length >= 2) {
+    const lastContent = String(
+      lastAIMessages[lastAIMessages.length - 1]?.content || "",
     );
-    const hasSensitiveTool = lastMessage.tool_calls.some((tool) =>
+    const prevContent = String(
+      lastAIMessages[lastAIMessages.length - 2]?.content || "",
+    );
+
+    // 如果最近两条AI消息内容相似（前50个字符相同），可能陷入循环
+    if (
+      lastContent.substring(0, 50) === prevContent.substring(0, 50) &&
+      lastContent.length > 10
+    ) {
+      console.warn(`[executor] 检测到重复AI回复，可能陷入循环`);
+
+      // 强制推进到下一个任务
+      if (todos.length > 0) {
+        const nextIndex = currentTodoIndex + 1;
+        if (nextIndex >= todos.length) {
+          console.log(`[executor] 所有任务已完成（循环检测触发）`);
+          return new Command({
+            update: {
+              taskStatus: "completed" as const,
+              iterationCount: 0,
+            },
+            goto: END,
+          });
+        }
+
+        console.log(`[executor] 强制推进到任务 ${nextIndex + 1}`);
+        return new Command({
+          update: {
+            currentTodoIndex: nextIndex,
+            iterationCount: 0,
+          },
+          goto: "executor",
+        });
+      }
+    }
+  }
+
+  // 构建上下文消息
+  const contextMessages: SystemMessage[] = [];
+
+  // 添加项目树（限制大小）
+  if (projectTreeText && projectTreeText.trim()) {
+    const maxTreeLength = 5000;
+    const truncatedTree =
+      projectTreeText.length > maxTreeLength
+        ? projectTreeText.substring(0, maxTreeLength) + "\n...（已截断）"
+        : projectTreeText;
+
+    contextMessages.push(
+      new SystemMessage({
+        content: `## 项目结构\n\n${truncatedTree}\n`,
+      }),
+    );
+  }
+
+  // 添加当前任务信息
+  if (todos.length > 0 && currentTodoIndex < todos.length) {
+    const currentTask = todos[currentTodoIndex];
+    const taskNumber = currentTodoIndex + 1;
+    const totalTasks = todos.length;
+
+    contextMessages.push(
+      new SystemMessage({
+        content: [
+          `你是一个高效的开发助手，专注于完成任务。`,
+          `==========================`,
+          `📋 当前任务 (${taskNumber}/${totalTasks}):`,
+          `「${currentTask}」`,
+          `==========================`,
+          ``,
+          `**执行规则**:`,
+          `1. 直接执行任务，使用必要的工具（如 write_file, read_file 等）`,
+          `2. 完成后必须明确说"✅ 任务完成"`,
+          `3. 不要询问用户是否需要帮助`,
+          `4. 不要说"如果你需要..."之类的话`,
+          `5. 一次性完成整个任务，不要分步骤`,
+          `6. 如果任务需要创建文件，必须调用 write_file 工具`,
+          ``,
+          `**禁止的回复**:`,
+          `❌ "如果你需要进一步的帮助..."`,
+          `❌ "请告诉我..."`,
+          `❌ "还有什么我可以帮你的吗？"`,
+          `❌ 不调用工具就说任务完成`,
+          ``,
+          `**正确的回复**:`,
+          `✅ 先调用工具完成实际操作`,
+          `✅ 然后说"✅ 任务完成。已创建XXX文件..."`,
+          ``,
+          `现在开始执行任务！必须调用工具来完成任务！`,
+        ].join("\n"),
+      }),
+    );
+
+    console.log(
+      `[executor] 当前任务 (${taskNumber}/${totalTasks}): ${currentTask.substring(0, 50)}...`,
+    );
+  }
+
+  // 添加摘要
+  if (summary) {
+    contextMessages.push(
+      new SystemMessage({
+        content: `对话摘要：\n${summary}`,
+      }),
+    );
+  }
+
+  // 合并所有消息 - 只保留最近的消息避免上下文过大
+  const recentMessages = messages.slice(-20); // 只保留最近20条消息
+  const fullMessages = [...contextMessages, ...recentMessages];
+
+  // 调用模型
+  console.log(
+    `[executor] 调用模型（迭代 ${iterationCount + 1}/${maxIterations}）`,
+  );
+  const response = await modelWithTools.invoke(fullMessages);
+
+  const newIterationCount = iterationCount + 1;
+
+  // 决定路由
+
+  // 1. 如果有工具调用 - 这是正常的执行路径
+  if (response.tool_calls?.length) {
+    const toolNames = response.tool_calls.map((t) => t.name).join(", ");
+    console.log(`[executor] 检测到工具调用: ${toolNames}`);
+
+    const hasSensitive = response.tool_calls.some((tool) =>
       SENSITIVE_TOOLS.includes(tool.name),
     );
 
-    if (hasSensitiveTool) {
-      console.log(`[路由调试] 包含敏感工具，路由到人工审批`);
-      return "human_review"; // 路由到审批节点
+    // 检查是否为演示模式
+    const demoMode = state.demoMode || false;
+
+    if (hasSensitive && !demoMode) {
+      console.log(`[executor] 包含敏感工具，需要人工审批`);
+      return new Command({
+        update: {
+          messages: [response],
+          pendingToolCalls: response.tool_calls,
+          iterationCount: newIterationCount,
+        },
+        goto: "review",
+      });
     }
 
-    console.log(`[路由调试] 普通工具，路由到toolNode`);
-    return "toolNode"; // 安全工具，直接执行
-  }
-
-  // 2. 检查是否有工具执行结果（表示刚完成了一次工具调用）
-  // 注意：这里不推进索引，工具执行后会直接回到agent继续处理当前任务
-  if (lastMessage && lastMessage._getType() === "tool_result") {
-    console.log(`[路由调试] 收到工具执行结果，回到agent继续处理当前任务`);
-    // 明确返回agent，确保工具执行后回到agent继续处理当前任务，不推进索引
-    return "agent";
-  }
-
-  // 3. 检查 todo 是否已经全部完成
-  const hasTodos = todos.length > 0;
-  const allTodosDone = hasTodos && currentTodoIndex >= todos.length;
-
-  // 关键修复：确保当所有todo完成时正确结束工作流
-  if (allTodosDone) {
-    console.log(`[路由调试] 所有todo已完成，结束工作流`);
-    return END;
-  }
-
-  // 4. 判断当前任务是否真正完成（这是关键判断）
-  // 只有当没有工具调用，也不是工具执行结果，且有明确的任务总结或完成信息时，才认为任务完成
-  if (hasTodos && currentTodoIndex < todos.length) {
-    // 检查最后一条消息是否是agent的总结性回复
-    const isTaskSummary =
-      lastMessage &&
-      AIMessage.isInstance(lastMessage) &&
-      typeof lastMessage.content === "string" &&
-      lastMessage.content.trim().length > 0;
-
-    if (isTaskSummary && typeof lastMessage.content === "string") {
-      // 增强任务完成判断：检查是否包含完成相关的关键词
-      const content = lastMessage.content.toLowerCase();
-
-      // 明确的完成信号
-      const completionSignals = [
-        "已完成",
-        "完成",
-        "任务完成",
-        "已实现",
-        "实现了",
-        "success",
-        "completed",
-        "done",
-        "✅",
-        "已结束",
-        "结束了",
-        "已完成当前任务",
-        "本任务已完成",
-        "已达成目标",
-      ];
-
-      // 任务未完成的信号（避免重复）
-      const notCompleteSignals = [
-        "我会",
-        "我将",
-        "计划",
-        "准备",
-        "需要",
-        "下一步",
-        "接下来",
-        "让我们",
-        "我们需要",
-        "让我来",
-      ];
-
-      // 检查是否包含完成信号
-      const containsCompletionSignal = completionSignals.some((signal) =>
-        content.includes(signal.toLowerCase()),
-      );
-
-      // 检查是否明确提到正在处理当前任务
-      const explicitlyHandlingTask =
-        content.includes("正在处理") &&
-        (content.includes("任务") || content.includes(currentTaskLower));
-
-      // 检查是否包含未完成信号
-      const containsNotCompleteSignal = notCompleteSignals.some((signal) =>
-        content.includes(signal.toLowerCase()),
-      );
-
-      // 检查是否有工具执行结果的引用
-      const referencesToolResult =
-        content.includes("根据") ||
-        content.includes("执行结果") ||
-        content.includes("显示") ||
-        content.includes("返回");
-
-      // 优先级判断逻辑
-      if (containsCompletionSignal) {
-        console.log(`[路由调试] 检测到明确的任务完成信号，推进到下一个任务`);
-        return "continue"; // 推进索引，执行下一个任务
-      } else if (explicitlyHandlingTask && !containsNotCompleteSignal) {
-        // 如果明确表示正在处理当前任务但没有未完成信号，可能需要继续
-        console.log(`[路由调试] 明确表示正在处理当前任务，继续处理`);
-        return "agent";
-      } else if (referencesToolResult && !containsCompletionSignal) {
-        // 引用了工具结果但没有完成信号，继续处理
-        console.log(`[路由调试] 引用工具结果，继续处理`);
-        return "agent";
-      } else if (content.length > 500 && !containsCompletionSignal) {
-        // 长文本但没有完成信号，可能是详细说明，继续处理
-        console.log(`[路由调试] 长文本响应，继续处理`);
-        return "agent";
-      } else {
-        console.log(
-          `[路由调试] 虽有回复但未检测到明确的任务完成信号，可能需要进一步交互`,
-        );
-        return END; // 如果没有明确的完成信号，结束工作流避免重复
-      }
+    if (hasSensitive && demoMode) {
+      console.log(`[executor] 演示模式: 自动批准敏感工具`);
     } else {
-      console.log(`[路由调试] 未检测到明确的任务完成信号，继续处理当前任务`);
-      // 如果到达这里，可能是工作流异常，返回agent继续
-      return "agent";
+      console.log(`[executor] 普通工具，直接执行`);
     }
+
+    return new Command({
+      update: {
+        messages: [response],
+        pendingToolCalls: response.tool_calls,
+        iterationCount: newIterationCount,
+      },
+      goto: "tools",
+    });
   }
 
-  // 5. 不走 todo 流程时，按老逻辑看是否需要总结
-  if (messages.length > 30) {
-    console.log(`[路由调试] 消息过多，需要总结`);
-    return "summarize";
+  // 2. 没有工具调用 - 检查任务是否完成
+  const content = String(response.content || "").toLowerCase();
+
+  // 更严格的任务完成判断
+  const hasCompletionKeyword =
+    content.includes("任务完成") ||
+    content.includes("已完成") ||
+    content.includes("完成了") ||
+    content.includes("task completed") ||
+    content.includes("completed") ||
+    /✅/.test(String(response.content || ""));
+
+  // 检测无用的询问式回复
+  const isAskingForHelp =
+    content.includes("如果你需要") ||
+    content.includes("if you need") ||
+    content.includes("请告诉我") ||
+    content.includes("let me know") ||
+    content.includes("还有什么") ||
+    content.includes("需要帮助");
+
+  // 检测是否真的执行了任务（通过检查是否有工具执行结果在消息中）
+  const hasToolResults = messages.some(
+    (m) =>
+      m &&
+      ((m as any)._getType?.() === "tool" ||
+        m.constructor.name === "ToolMessage"),
+  );
+
+  // 任务完成的条件：
+  // 1. 有完成关键词 且 之前有工具执行结果
+  // 2. 或者迭代次数超过阈值（防止无限循环）
+  const taskReallyCompleted = hasCompletionKeyword && hasToolResults;
+  const stuckInLoop = newIterationCount >= 3 && !response.tool_calls?.length;
+
+  if ((taskReallyCompleted || stuckInLoop) && todos.length > 0) {
+    const nextIndex = currentTodoIndex + 1;
+    const allDone = nextIndex >= todos.length;
+
+    if (stuckInLoop && !taskReallyCompleted) {
+      console.log(
+        `[executor] 检测到循环（无工具调用），强制完成任务 ${currentTodoIndex + 1}`,
+      );
+    } else {
+      console.log(`[executor] 任务 ${currentTodoIndex + 1} 完成`);
+    }
+
+    if (allDone) {
+      console.log(`[executor] 所有任务已完成`);
+      return new Command({
+        update: {
+          messages: [response],
+          currentTodoIndex: nextIndex,
+          taskCompleted: true,
+          taskStatus: "completed" as const,
+          iterationCount: 0,
+        },
+        goto: END,
+      });
+    }
+
+    console.log(`[executor] 继续下一个任务`);
+    return new Command({
+      update: {
+        messages: [response],
+        currentTodoIndex: nextIndex,
+        taskCompleted: true,
+        iterationCount: 0, // 重置计数
+      },
+      goto: "executor",
+    });
   }
 
-  // 6. 默认结束
-  console.log(`[路由调试] 默认结束工作流`);
-  return END;
+  // 3. 如果是询问式回复，不添加到消息中，直接重试
+  if (isAskingForHelp) {
+    console.log(`[executor] 检测到询问式回复，重试`);
+    return new Command({
+      update: {
+        iterationCount: newIterationCount,
+      },
+      goto: "executor",
+    });
+  }
+
+  // 4. 继续当前任务
+  console.log(`[executor] 继续处理当前任务`);
+  return new Command({
+    update: {
+      messages: [response],
+      iterationCount: newIterationCount,
+    },
+    goto: "executor",
+  });
 }
 
-const workflow = new StateGraph(StateAnnotation)
-  .addNode("processReferencedFiles", processReferencedFiles)
-  .addNode("project_planner", wrapNode("project_planner", projectPlannerNode)) // 架构规划，生成 projectPlanText & projectInitSteps
-  .addNode("task_planner", wrapNode("task_planner", taskPlannerNode)) // 根据项目规划生成 todos
-  .addNode("summarize", wrapNode("summarize", summarizeConversation))
-  .addNode("agent", wrapNode("agent", agent))
-  .addNode("toolNode", toolNode)
-  .addNode("toolExecutor", wrapNode("toolExecutor", toolExecutor))
-  .addNode("human_review", wrapNode("human_review", humanReviewNode))
-  .addNode("advance_todo", async (state) => {
-    // 安全地推进索引：确保索引不会超过todos数组长度
-    const currentIndex = state.currentTodoIndex ?? 0;
-    const todosLength = state.todos?.length ?? 0;
+/**
+ * 工具执行节点
+ */
+const toolsNodeBase = new ToolNode(tools);
 
-    // 只有当当前索引小于todos长度时才增加索引
-    const newIndex =
-      currentIndex < todosLength ? currentIndex + 1 : currentIndex;
+async function toolsNode(state: AgentState) {
+  console.log("[tools] 执行工具");
 
-    console.log(
-      `[advance_todo] 索引更新: ${currentIndex} -> ${newIndex}, todos长度: ${todosLength}`,
-    );
-    return { currentTodoIndex: newIndex };
-  })
-  .addNode(
-    "inject_project_tree",
-    wrapNode("inject_project_tree", injectProjectTreeNode),
-  )
-  // 入口：先跑 project_planner -> task_planner -> inject_project_tree -> agent
-  .addEdge(START, "processReferencedFiles")
-  .addEdge("processReferencedFiles", "project_planner")
-  .addEdge("project_planner", "task_planner")
-  .addEdge("task_planner", "inject_project_tree")
-  .addEdge("inject_project_tree", "agent")
-  // agent 输出后，根据路由决定下一步
-  .addConditionalEdges("agent", routeAgentOutput, {
-    toolNode: "toolExecutor", // 安全工具 -> 直接交给 toolExecutor 执行并记录
-    human_review: "human_review", // 节点名保持一致
-    summarize: "summarize",
-    continue: "advance_todo", // 关键修复：任务完成后先推进索引，再执行下一个任务
-    agent: "agent", // 明确添加agent到agent的自连接，用于工具执行后继续当前任务
-    [END]: END,
-  })
-  // 敏感工具 -> 人工审批 -> 工具 -> 回到agent继续处理当前任务
-  .addEdge("human_review", "toolNode")
-  .addEdge("toolNode", "toolExecutor")
-  .addEdge("toolExecutor", "agent") // 关键修复：工具执行后回到agent继续处理当前任务，不推进索引
-  // 只有真正完成任务时才通过continue路由推进索引
-  .addConditionalEdges(
-    "advance_todo",
-    (state) => {
-      // 条件判断：检查索引推进后是否还有任务要执行
-      const newIndex = state.currentTodoIndex ?? 0;
-      const todosLength = state.todos?.length ?? 0;
+  try {
+    // 执行工具
+    const result = await toolsNodeBase.invoke(state);
 
-      console.log(
-        `[advance_todo路由] 新索引: ${newIndex}, todos长度: ${todosLength}`,
-      );
+    console.log("[tools] 工具执行完成");
 
-      // 如果索引已达到或超过todos长度，说明所有任务都已完成，直接结束工作流
-      if (newIndex >= todosLength) {
-        console.log(`[advance_todo路由] 所有任务已完成，结束工作流`);
-        return "end";
-      }
+    // 返回到 executor
+    return new Command({
+      update: {
+        ...result,
+        projectTreeInjected: false, // 重置，下次重新扫描
+      },
+      goto: "executor",
+    });
+  } catch (error) {
+    console.error("[tools] 工具执行失败:", error);
 
-      // 否则继续执行下一个任务
-      console.log(`[advance_todo路由] 继续执行下一个任务`);
-      return "next_task";
-    },
-    {
-      end: END, // 所有任务完成，结束工作流
-      next_task: "inject_project_tree", // 继续执行下一个任务
-    },
-  )
-  .addEdge("inject_project_tree", "agent") // 开始执行下一个任务
-  // 总结只是压缩上下文，不结束，继续agent
-  .addEdge("summarize", "agent");
+    return new Command({
+      update: {
+        messages: [
+          new SystemMessage({
+            content: `工具执行失败: ${error}`,
+          }),
+        ],
+      },
+      goto: "executor",
+    });
+  }
+}
 
+/**
+ * 人工审批节点
+ */
+async function reviewNode(state: AgentState) {
+  console.log("[review] 等待人工审批");
+
+  const { pendingToolCalls = [] } = state;
+
+  console.log("=== 人工审批请求 ===");
+  console.log(`待审批工具: ${pendingToolCalls.length} 个`);
+
+  pendingToolCalls.forEach((call, index) => {
+    console.log(`\n工具 ${index + 1}: ${call.name}`);
+    console.log(`参数: ${JSON.stringify(call.args, null, 2)}`);
+  });
+
+  console.log("\n=== 审批完成，继续执行 ===\n");
+
+  // 这里会被 interruptBefore 中断
+  // 用户批准后继续到 tools
+
+  return new Command({
+    update: {},
+    goto: "tools",
+  });
+}
+
+/**
+ * 构建 Graph
+ */
+function buildGraph() {
+  console.log("[graph] 构建 Graph");
+
+  const workflow = new StateGraph(StateAnnotation)
+    // 添加节点，指定可能的出口
+    .addNode("initialize", initializeNode, {
+      ends: ["planner"],
+    })
+    .addNode("planner", plannerNode, {
+      ends: ["executor"],
+    })
+    .addNode("executor", executorNode, {
+      ends: ["executor", "tools", "review", END],
+    })
+    .addNode("tools", toolsNode, {
+      ends: ["executor"],
+    })
+    .addNode("review", reviewNode, {
+      ends: ["tools"],
+    })
+
+    // 只需要定义入口边
+    .addEdge(START, "initialize");
+
+  console.log("[graph] Graph 构建完成");
+  return workflow;
+}
+
+/**
+ * 初始化并编译 Graph
+ * @param options - 配置选项
+ * @param options.demoMode - 演示模式,跳过人工审批
+ * @param options.recursionLimit - 递归限制，默认100
+ */
 export let graph: any;
-export async function initializeGraph() {
-  if (graph) {
+
+export async function initializeGraph(
+  options: { demoMode?: boolean; recursionLimit?: number } = {},
+) {
+  const { demoMode = false, recursionLimit = 100 } = options;
+
+  // 如果已有graph且模式匹配,直接返回
+  if (graph && graph._demoMode === demoMode) {
+    console.log(`[graph] 使用已编译的 Graph (演示模式: ${demoMode})`);
     return graph;
   }
-  if (!checkpointer) {
-    checkpointer = await initializeCheckpointer();
+
+  console.log(
+    `[graph] 初始化 Graph (演示模式: ${demoMode}, 递归限制: ${recursionLimit})`,
+  );
+
+  const checkpointer = await initializeCheckpointer();
+  const workflow = buildGraph();
+
+  // 根据模式决定是否启用人工审批
+  const compileOptions: any = {
+    checkpointer,
+  };
+
+  if (!demoMode) {
+    // 生产模式: 启用人工审批
+    compileOptions.interruptBefore = ["review"];
+    console.log("[graph] 启用人工审批机制");
+  } else {
+    // 演示模式: 跳过人工审批
+    console.log("[graph] 演示模式: 跳过人工审批");
   }
 
-  graph = workflow.compile({
-    checkpointer: checkpointer,
-    interruptBefore: ["human_review"],
-  });
+  graph = workflow.compile(compileOptions);
+  graph._demoMode = demoMode; // 标记当前模式
+  graph._recursionLimit = recursionLimit; // 保存递归限制
+
+  console.log("[graph] Graph 编译完成");
   return graph;
 }
 
-// 延迟编译图，等待检查点初始化
+/**
+ * 获取推荐的递归限制
+ * 根据任务数量动态计算
+ */
+export function getRecommendedRecursionLimit(taskCount: number): number {
+  // 每个任务大约需要 5-10 次迭代（调用模型 + 工具执行）
+  // 加上初始化和规划阶段的开销
+  const baseLimit = 20; // 初始化和规划
+  const perTaskLimit = 15; // 每个任务的迭代次数
+  return baseLimit + taskCount * perTaskLimit;
+}
