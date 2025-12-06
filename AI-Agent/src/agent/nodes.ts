@@ -106,6 +106,7 @@ export async function chatNode(state: AgentState) {
     const chatPrompt = buildChatAgentPrompt();
     const response = await baseModel.invoke([
       new SystemMessage(chatPrompt),
+        ...state.messages,
       new HumanMessage(userInput),
     ]);
 
