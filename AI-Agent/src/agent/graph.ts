@@ -74,7 +74,7 @@ export async function initializeGraph(
 
   // 根据模式决定是否启用人工审批
   const compileOptions: any = {
-    checkpointer,
+    checkpointer: checkpointer,
   };
 
   if (!demoMode) {
@@ -87,7 +87,7 @@ export async function initializeGraph(
   }
 
   graph = workflow.compile(compileOptions);
-  graph._demoMode = demoMode; // 标记当前模式
+  // graph._demoMode = demoMode; // 标记当前模式
   graph._recursionLimit = recursionLimit; // 保存递归限制
 
   console.log("[graph] Graph 编译完成");

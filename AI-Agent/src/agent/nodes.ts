@@ -96,17 +96,11 @@ export async function chatNode(state: AgentState) {
   console.log("[chat] 生成闲聊回复");
 
   try {
-    // 获取最新的用户消息
-    const lastMessage = state.messages[state.messages.length - 1];
-    const userInput = lastMessage.content.toString();
-
-    console.log(`[chat] 处理闲聊: ${userInput.substring(0, 100)}...`);
-
-    // 生成闲聊回复
+    // 使用完整的对话历史来生成回复
     const chatPrompt = buildChatAgentPrompt();
     const response = await baseModel.invoke([
       new SystemMessage(chatPrompt),
-      new HumanMessage(userInput),
+      ...state.messages, // 传递完整的对话历史
     ]);
 
     console.log(
