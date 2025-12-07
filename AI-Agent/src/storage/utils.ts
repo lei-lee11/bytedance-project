@@ -138,7 +138,7 @@ export function validateHistoryRecord(record: Partial<HistoryRecord>): {
 
   if (!record.event_type) {
     errors.push('event_type is required');
-  } else if (!['user_message', 'ai_response', 'tool_call', 'system_summarize', 'error', 'session_created', 'session_updated'].includes(record.event_type)) {
+  } else if (!['user_message', 'ai_response', 'tool_call', 'system_summarize', 'error', 'session_created'].includes(record.event_type)) {
     errors.push('event_type is invalid');
   }
 

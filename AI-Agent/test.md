@@ -41,7 +41,7 @@
 ## 项目结构规划
 
 ```
-将项目根目录设置为：AI-Agent/game
+将项目写入：AI-Agent/game目录中
 game/
 ├── core/           # 核心游戏逻辑
 ├── render/         # 渲染相关代码

@@ -96,6 +96,29 @@ export const InputArea: FC<InputAreaProps> = ({
     }
 
     // -------------------------------------------------------
+    // 场景 B2: 会话删除模式 (/delete)
+    // -------------------------------------------------------
+    if (cleanLine.startsWith("/delete")) {
+      const param = cleanLine.replace(/^\/delete\s*/, "").toLowerCase();
+
+      const sessionItems = sessions.map((s) => ({
+        value: `/delete ${s.metadata.thread_id}`,
+        description: s.metadata.title
+          ? `🗑️ ${s.metadata.title} (${s.metadata.message_count} messages)`
+          : `🗑️ Untitled (${s.metadata.message_count} messages)`,
+        type: "command",
+      }));
+
+      const matches = sessionItems.filter(
+        (item) =>
+          item.value.toLowerCase().includes(param) ||
+          item.description.toLowerCase().includes(param),
+      );
+
+      if (matches.length > 0) return matches;
+    }
+
+    // -------------------------------------------------------
     // 场景 C: 通用指令模式 (/)
     // -------------------------------------------------------
     if (cleanLine.startsWith("/")) {

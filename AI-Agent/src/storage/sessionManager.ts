@@ -70,7 +70,7 @@ export class SessionManager implements ISessionManager {
                 timestamp: now,
                 event_type: 'session_created',
                 content: options.initialMessage,
-                display_priority: 'high',
+                display_priority: 'low',
                 metadata: {
                     title: metadata.title,
                     programming_language: options.programmingLanguage

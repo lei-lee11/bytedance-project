@@ -110,11 +110,29 @@ export const useSessionManager = () => {
       };
 
       try {
+        // 根据事件类型设置正确的显示优先级
+        let displayPriority: 'high' | 'medium' | 'low';
+        switch (eventType) {
+          case 'user_message':
+          case 'ai_response':
+          case 'error':
+            displayPriority = 'high';
+            break;
+          case 'tool_call':
+            displayPriority = 'medium';
+            break;
+          case 'session_created':
+          case 'system_summarize':
+            displayPriority = 'low';
+            break;
+          default:
+            displayPriority = 'medium'; // 默认中等优先级
+        }
+
         await storage.history.addHistoryRecord(activeSessionId, {
           event_type: eventType,
           content: content,
-          // System 消息优先级低，其他高
-          display_priority: role === "system" ? "medium" : "high",
+          display_priority: displayPriority,
           metadata: metadata,
         });
       } catch (e) {
