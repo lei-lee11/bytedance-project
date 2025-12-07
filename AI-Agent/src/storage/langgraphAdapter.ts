@@ -622,8 +622,8 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
             else {
                 // console.log(`📋 使用现有会话: ${threadId}`);
                 const metadata1 = sessionInfo.metadata
-                // 自动激活归档会话
-                if (metadata1.status === 'archived') {
+                // 自动激活归档会话 - 添加空值检查防止错误
+                if (metadata1 && metadata1.status === 'archived') {
                     // console.log(`🔄 自动激活归档会话: ${threadId}`);
                     await this.storage.sessions.restoreSession(threadId);
                 }

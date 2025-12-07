@@ -3,6 +3,7 @@ import {
   AIMessage,
   SystemMessage,
   HumanMessage,
+  ToolMessage,
 } from "@langchain/core/messages";
 import { AgentState } from "./state.ts";
 import { SENSITIVE_TOOLS, tools } from "../utils/tools/index.ts";
@@ -281,7 +282,7 @@ export async function plannerNode(state: AgentState) {
   const taskPlan = await taskModel.invoke([taskPlanSystem, taskPlanUser]);
 
   const todos = Array.isArray(taskPlan.todos) ? taskPlan.todos : [];
-
+  console.log("todos:", todos);
   console.log(`[planner] 生成了 ${todos.length} 个任务`);
 
   return new Command({
@@ -391,6 +392,128 @@ export async function executorNode(state: AgentState) {
     }
   }
 
+  // 检测重复的工具调用 - 防止循环
+  const recentMessages = messages.slice(-15);
+  const toolCallMessages = recentMessages.filter(
+    (m) => m && (m as any).tool_calls?.length > 0,
+  );
+
+  if (toolCallMessages.length >= 4) {
+    const recentToolCalls = toolCallMessages.slice(-4).map((m) => {
+      const calls = (m as any).tool_calls || [];
+      return calls.map((tc: any) => tc.name).join(",");
+    });
+
+    const uniqueCalls = new Set(recentToolCalls);
+    if (uniqueCalls.size === 1 && recentToolCalls[0]) {
+      const repeatedTool = recentToolCalls[0];
+      console.error(
+        `[executor] ⚠️ 检测到循环: ${repeatedTool} 被连续调用 ${recentToolCalls.length} 次`,
+      );
+
+      if (repeatedTool === "list_directory") {
+        console.error(
+          `[executor] 🔍 诊断: list_directory 循环通常是 projectRoot 配置错误`,
+        );
+        console.error(
+          `[executor] 当前 projectRoot: ${state.projectRoot || "未设置"}`,
+        );
+      }
+
+      return new Command({
+        update: {
+          error: `检测到循环调用工具: ${repeatedTool}`,
+          messages: [
+            new SystemMessage({
+              content: [
+                `⚠️ 检测到循环,已自动停止执行。`,
+                ``,
+                `工具 "${repeatedTool}" 被连续调用 ${recentToolCalls.length} 次。`,
+                ``,
+                `可能原因:`,
+                `1. projectRoot 配置错误`,
+                `2. 文件路径不存在`,
+                `3. 权限问题`,
+                `4. AI 陷入思维循环`,
+                ``,
+                `建议:`,
+                `- 检查 projectRoot 配置`,
+                `- 验证文件路径是否正确`,
+                `- 查看工具调用日志`,
+              ].join("\n"),
+            }),
+          ],
+          taskStatus: "completed" as const,
+        },
+        goto: END,
+      });
+    }
+  }
+
+  // 检测重复的 AI 回复内容 - 防止无工具调用的循环
+  const recentAIMessages = recentMessages
+    .filter(
+      (m) =>
+        m &&
+        (m as any)._getType?.() === "ai" &&
+        !((m as any).tool_calls?.length > 0),
+    )
+    .slice(-3); // 最近3条AI文本回复
+
+  if (recentAIMessages.length >= 3) {
+    const messageContents = recentAIMessages.map((m) => {
+      const content = String((m as any).content || "");
+      // 只比较前200个字符,避免细微差异
+      return content.substring(0, 200).trim().toLowerCase();
+    });
+
+    // 如果3条消息都非常相似
+    const allSimilar = messageContents.every((content, i) => {
+      if (i === 0) return true;
+      const prev = messageContents[i - 1];
+      // 计算相似度(简单的字符串匹配)
+      const similarity =
+        content === prev ||
+        content.includes(prev.substring(0, 100)) ||
+        prev.includes(content.substring(0, 100));
+      return similarity;
+    });
+
+    if (allSimilar && messageContents[0].length > 10) {
+      console.error(`[executor] ⚠️ 检测到重复的 AI 回复,可能陷入循环`);
+      console.error(`[executor] 🛑 强制完成当前任务以打破循环`);
+
+      // 强制完成当前任务
+      const nextIndex = currentTodoIndex + 1;
+      const allDone = nextIndex >= todos.length;
+
+      if (allDone) {
+        return new Command({
+          update: {
+            messages: [
+              new SystemMessage(`⚠️ 检测到重复回复循环,已强制完成所有任务`),
+            ],
+            currentTodoIndex: nextIndex,
+            taskCompleted: true,
+            taskStatus: "completed" as const,
+            iterationCount: 0,
+          },
+          goto: END,
+        });
+      }
+
+      return new Command({
+        update: {
+          messages: [new SystemMessage(`⚠️ 检测到重复回复循环,跳过到下一任务`)],
+          currentTodoIndex: nextIndex,
+          taskCompleted: true,
+          iterationCount: 0,
+        },
+        goto: "executor",
+      });
+    }
+  }
+
   // 构建上下文消息
   const contextMessages: SystemMessage[] = [];
 
@@ -462,8 +585,8 @@ export async function executorNode(state: AgentState) {
   }
 
   // 合并所有消息 - 只保留最近的消息避免上下文过大
-  const recentMessages = messages.slice(-20); // 只保留最近20条消息
-  const fullMessages = [...contextMessages, ...recentMessages];
+  const recentMessagesForContext = messages.slice(-20); // 只保留最近20条消息
+  const fullMessages = [...contextMessages, ...recentMessagesForContext];
 
   // 调用模型
   console.log(
@@ -536,18 +659,21 @@ export async function executorNode(state: AgentState) {
     content.includes("还有什么") ||
     content.includes("需要帮助");
 
-  // 检测是否真的执行了任务（通过检查是否有工具执行结果在消息中）
-  const hasToolResults = messages.some(
-    (m) =>
-      m &&
-      ((m as any)._getType?.() === "tool" ||
-        m.constructor.name === "ToolMessage"),
-  );
+  // 检测本次迭代中是否有工具执行(查看最近的消息)
+  const recentToolMessages = messages
+    .slice(-10)
+    .filter(
+      (m) =>
+        m &&
+        ((m as any)._getType?.() === "tool" ||
+          m.constructor.name === "ToolMessage"),
+    );
+  const hasRecentToolExecution = recentToolMessages.length > 0;
 
-  // 任务完成的条件：
-  // 1. 有完成关键词 且 之前有工具执行结果
+  // 任务完成的条件(简化逻辑):
+  // 1. 有完成关键词 = 直接认为完成
   // 2. 或者迭代次数超过阈值（防止无限循环）
-  const taskReallyCompleted = hasCompletionKeyword && hasToolResults;
+  const taskReallyCompleted = hasCompletionKeyword;
   const stuckInLoop = newIterationCount >= 3 && !response.tool_calls?.length;
 
   if ((taskReallyCompleted || stuckInLoop) && todos.length > 0) {
@@ -588,18 +714,75 @@ export async function executorNode(state: AgentState) {
     });
   }
 
-  // 3. 如果是询问式回复，不添加到消息中，直接重试
-  if (isAskingForHelp) {
-    console.log(`[executor] 检测到询问式回复，重试`);
+  // 3. 如果是询问式回复,视为任务完成信号
+  if (isAskingForHelp && hasRecentToolExecution) {
+    console.log(`[executor] 检测到询问式回复(有工具执行记录),视为任务完成`);
+
+    const nextIndex = currentTodoIndex + 1;
+    const allDone = nextIndex >= todos.length;
+
+    if (allDone) {
+      console.log(`[executor] 所有任务已完成`);
+      return new Command({
+        update: {
+          messages: [response],
+          currentTodoIndex: nextIndex,
+          taskCompleted: true,
+          taskStatus: "completed" as const,
+          iterationCount: 0,
+        },
+        goto: END,
+      });
+    }
+
+    console.log(`[executor] 继续下一个任务`);
     return new Command({
       update: {
-        iterationCount: newIterationCount,
+        messages: [response],
+        currentTodoIndex: nextIndex,
+        taskCompleted: true,
+        iterationCount: 0,
       },
       goto: "executor",
     });
   }
 
-  // 4. 继续当前任务
+  // 4. 如果没有任何有用信息且没有工具调用,可能是无意义的回复
+  if (
+    !hasCompletionKeyword &&
+    !hasRecentToolExecution &&
+    newIterationCount >= 2
+  ) {
+    console.log(`[executor] 检测到无意义回复,强制继续下一任务`);
+
+    const nextIndex = currentTodoIndex + 1;
+    const allDone = nextIndex >= todos.length;
+
+    if (allDone) {
+      return new Command({
+        update: {
+          messages: [response],
+          currentTodoIndex: nextIndex,
+          taskCompleted: true,
+          taskStatus: "completed" as const,
+          iterationCount: 0,
+        },
+        goto: END,
+      });
+    }
+
+    return new Command({
+      update: {
+        messages: [response],
+        currentTodoIndex: nextIndex,
+        taskCompleted: true,
+        iterationCount: 0,
+      },
+      goto: "executor",
+    });
+  }
+
+  // 5. 继续当前任务
   console.log(`[executor] 继续处理当前任务`);
   return new Command({
     update: {
@@ -609,6 +792,7 @@ export async function executorNode(state: AgentState) {
     goto: "executor",
   });
 }
+
 /**
  * 工具执行节点
  */
@@ -618,10 +802,17 @@ export async function toolsNode(state: AgentState) {
   console.log("[tools] 执行工具");
 
   try {
-    // 执行工具
-    const result = await toolsNodeBase.invoke(state);
+    // 执行工具 - 传递 projectRoot 配置
+    const result = await toolsNodeBase.invoke(state, {
+      configurable: {
+        projectRoot: state.projectRoot || process.cwd(),
+      },
+    });
 
     console.log("[tools] 工具执行完成");
+    console.log(
+      `[tools] 使用 projectRoot: ${state.projectRoot || process.cwd()}`,
+    );
 
     // 返回到 executor
     return new Command({

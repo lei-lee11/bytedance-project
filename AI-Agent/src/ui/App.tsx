@@ -14,7 +14,7 @@ import { InputArea } from "./components/TextInput/InputArea.tsx";
 import { useSessionManager } from "./hooks/useSessionManager.ts";
 import { useMessageProcessor } from "./hooks/useMessageProcessor.ts";
 import { StatusBar } from "./components/StatusBar.tsx";
-
+import { Command } from "@langchain/langgraph";
 // ... marked 配置保持不变 ...
 marked.setOptions({
   renderer: new TerminalRenderer({
@@ -127,7 +127,7 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
 
       try {
         const inputs = isResume
-          ? null
+          ? new Command({ resume: "approved" }) // 使用 Command 明确指示恢复执行
           : {
               messages: [new HumanMessage(text!)],
               pendingFilePaths: pendingFiles,
@@ -219,15 +219,45 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
         }
 
         // --- 处理中断 (Approval) ---
-        if (snapshot.next.length > 0) {
-          setAwaitingApproval(true);
+        // 检查是否有需要审批的工具调用
+        const pendingToolCalls = snapshot.values.pendingToolCalls || [];
+
+        if (pendingToolCalls.length > 0) {
           const lastMsg =
             snapshot.values.messages[snapshot.values.messages.length - 1];
+
+          // 1. 尝试从最后一条消息获取
+          let toolData = null;
+
           if (lastMsg?.tool_calls?.length) {
-            setPendingTool({
+            toolData = {
               name: lastMsg.tool_calls[0].name,
               args: lastMsg.tool_calls[0].args,
-            });
+            };
+          }
+          // 2. 兜底策略：如果消息里没找到，尝试直接从 state 的 pendingToolCalls 数组中获取
+          // (假设你的 Graph state 中 pendingToolCalls 存储了工具对象)
+          else if (pendingToolCalls[0] && pendingToolCalls[0].name) {
+            toolData = {
+              name: pendingToolCalls[0].name,
+              args: pendingToolCalls[0].args || {},
+            };
+          }
+
+          // 🔥 关键修复：只有当成功获取到 toolData 时，才设置审批状态
+          if (toolData) {
+            setPendingTool(toolData);
+            setAwaitingApproval(true);
+          } else {
+            console.warn(
+              "Detected pending tool calls but could not extract tool data:",
+              pendingToolCalls,
+            );
+            // 可选：添加一条系统消息提示错误，避免界面卡死
+            await addMessage(
+              "system",
+              "⚠️ System paused for approval, but tool data is missing.",
+            );
           }
         }
       } catch (e: any) {
@@ -318,40 +348,71 @@ Use /getSessionInfo <id> to view detailed session information.`,
 
         // 验证目标会话ID
         if (!targetId) {
-          await addMessage("system", "❌ Please specify a session ID to delete. Usage: /delete <session_id>");
+          await addMessage(
+            "system",
+            "❌ Please specify a session ID to delete. Usage: /delete <session_id>",
+          );
           return;
         }
 
         // 检查会话是否存在
-        const targetSession = sessionList.find(s =>
-          s.metadata?.thread_id === targetId ||
-          s.metadata?.thread_id?.includes(targetId)
+        const targetSession = sessionList.find(
+          (s) =>
+            s.metadata?.thread_id === targetId ||
+            s.metadata?.thread_id?.includes(targetId),
         );
 
         if (!targetSession) {
-          await addMessage("system", `❌ Session not found: ${targetId}\nUse /list to see available sessions.`);
+          await addMessage(
+            "system",
+            `❌ Session not found: ${targetId}\nUse /list to see available sessions.`,
+          );
           return;
         }
 
-        const fullSessionId = targetSession.metadata?.thread_id!;
+        // 确保会话有有效的metadata和thread_id
+        if (!targetSession.metadata?.thread_id) {
+          await addMessage(
+            "system",
+            `❌ Invalid session data: Missing thread_id for session`,
+          );
+          return;
+        }
+
+        const fullSessionId = targetSession.metadata.thread_id;
         const sessionTitle = targetSession.metadata?.title || "Untitled";
 
         try {
           // 处理删除当前活跃会话的情况
           if (fullSessionId === threadId) {
             // 检查是否有其他会话可以切换
-            const otherSessions = sessionList.filter(s => s.metadata?.thread_id !== threadId);
+            const otherSessions = sessionList.filter(
+              (s) => s.metadata?.thread_id !== threadId,
+            );
 
             if (otherSessions.length > 0) {
               // 有其他会话，先切换到最近的会话，再删除当前会话
               const nextSession = otherSessions[0];
-              const nextSessionId = nextSession.metadata?.thread_id!;
+
+              // 确保下一个会话有有效的metadata和thread_id
+              if (!nextSession.metadata?.thread_id) {
+                await addMessage(
+                  "system",
+                  `❌ Invalid session data: Missing thread_id for next session`,
+                );
+                return;
+              }
+
+              const nextSessionId = nextSession.metadata.thread_id;
 
               // 先切换到新会话
               await switchSession(nextSessionId);
 
               // 然后记录系统消息到新会话
-              await addMessage("system", `✅ Deleted current session: ${fullSessionId} (${sessionTitle})\n🔄 Automatically switched to: ${nextSessionId}`);
+              await addMessage(
+                "system",
+                `✅ Deleted current session: ${fullSessionId} (${sessionTitle})\n🔄 Automatically switched to: ${nextSessionId}`,
+              );
 
               // 最后删除原会话
               await storage.sessions.deleteSession(fullSessionId);
@@ -360,7 +421,10 @@ Use /getSessionInfo <id> to view detailed session information.`,
               const newSessionId = await createNewSession();
 
               // 记录系统消息到新会话
-              await addMessage("system", `✅ Deleted current session: ${fullSessionId} (${sessionTitle})\n🆕 Created new session: ${newSessionId}`);
+              await addMessage(
+                "system",
+                `✅ Deleted current session: ${fullSessionId} (${sessionTitle})\n🆕 Created new session: ${newSessionId}`,
+              );
 
               // 最后删除原会话
               await storage.sessions.deleteSession(fullSessionId);
@@ -368,11 +432,17 @@ Use /getSessionInfo <id> to view detailed session information.`,
           } else {
             // 删除非当前会话
             await storage.sessions.deleteSession(fullSessionId);
-            await addMessage("system", `✅ Successfully deleted session: ${fullSessionId} (${sessionTitle})`);
+            await addMessage(
+              "system",
+              `✅ Successfully deleted session: ${fullSessionId} (${sessionTitle})`,
+            );
           }
         } catch (error: any) {
           console.error("Delete session error:", error);
-          await addMessage("system", `❌ Failed to delete session: ${error.message}`);
+          await addMessage(
+            "system",
+            `❌ Failed to delete session: ${error.message}`,
+          );
         }
         return;
       }
