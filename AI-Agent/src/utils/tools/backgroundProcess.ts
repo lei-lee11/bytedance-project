@@ -1,6 +1,6 @@
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
-import { spawn, ChildProcess } from "child_process";
+import { spawn, ChildProcess, exec } from "child_process";
 
 // 进程信息接口
 interface ProcessInfo {
@@ -74,11 +74,24 @@ class ProcessManager {
 
     try {
       // 启动子进程
+      // 注意：使用 shell: true 时，在 Windows 上会创建进程树：
+      // 1. Node.js spawn 启动 cmd.exe（这是 childProcess.pid）
+      // 2. cmd.exe 启动实际命令进程（如 python）
+      // 因此会看到两个进程：
+      //   - cmd.exe 进程（PID = childProcess.pid）
+      //   - 实际命令进程（如 python，PID 不同）
+      // 为了解决这个问题，在终止进程时使用 taskkill /T 来终止整个进程树
+      // 这确保了所有子进程（包括实际的命令进程）都会被终止
       const childProcess = spawn(command, args, {
         cwd: workingDirectory || process.cwd(),
         shell: true,
         detached: false,
       });
+
+      // 检查 PID 是否存在（spawn 可能立即失败）
+      if (childProcess.pid === undefined) {
+        throw new Error("进程启动失败：无法获取进程 ID");
+      }
 
       processInfo.process = childProcess;
       processInfo.pid = childProcess.pid;
@@ -107,29 +120,47 @@ class ProcessManager {
       childProcess.on("exit", (code, signal) => {
         const info = this.processes.get(processId);
         if (info) {
-          info.status = code === 0 ? "stopped" : "error";
-          info.exitCode = code || undefined;
+          // 如果进程被信号终止（code 为 null，signal 有值），视为正常停止
+          // 或者退出码为 0，也视为正常停止
+          if (code === 0 || (code === null && signal)) {
+            info.status = "stopped";
+          } else {
+            info.status = "error";
+          }
+          info.exitCode = code ?? undefined;
           this.addLog(
             processId,
-            `[系统] 进程退出 - 退出码: ${code}, 信号: ${signal || "none"}`
+            `[系统] 进程退出 - 退出码: ${code ?? "null"}, 信号: ${signal || "none"}`
           );
         }
       });
 
-      // 监听错误
+      // 监听错误（spawn 失败会触发此事件）
+      // 注意：error 事件可能在 spawn 返回后立即触发
+      let errorHandled = false;
       childProcess.on("error", (error) => {
+        if (errorHandled) return;
+        errorHandled = true;
+        
         const info = this.processes.get(processId);
         if (info) {
           info.status = "error";
-          this.addLog(processId, `[错误] ${error.message}`);
+          this.addLog(processId, `[错误] 进程启动失败: ${error.message}`);
+          // 确保进程信息已存储（标记为错误状态）
+          if (!this.processes.has(processId)) {
+            this.processes.set(processId, info);
+          }
         }
       });
 
+      // 存储进程信息（在确认 PID 存在后）
       this.processes.set(processId, processInfo);
       return processId;
-    } catch (error: any) {
+    } catch (error: unknown) {
+      // 同步错误（如参数错误等）
       processInfo.status = "error";
-      processInfo.logs.push(`[错误] 启动失败: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      processInfo.logs.push(`[错误] 启动失败: ${errorMessage}`);
       this.processes.set(processId, processInfo);
       throw error;
     }
@@ -162,35 +193,181 @@ class ProcessManager {
       throw new Error(`❌ 无法停止进程: 进程句柄无效`);
     }
 
+    const childProcess = info.process;
+    const isWindows = process.platform === "win32";
+    let isResolved = false; // 防止重复 resolve
+
     return new Promise((resolve) => {
-      const process = info.process!;
+      const safeResolve = (success: boolean) => {
+        if (!isResolved) {
+          isResolved = true;
+          resolve(success);
+        }
+      };
+
+      // 检查进程是否已经退出（处理竞态条件）
+      if (childProcess.killed || childProcess.exitCode !== null) {
+        info.status = "stopped";
+        this.addLog(processId, "[系统] 进程已经退出");
+        safeResolve(true);
+        return;
+      }
 
       // 设置超时强制杀死
       const killTimeout = setTimeout(() => {
+        if (isResolved) return;
+        
         try {
-          process.kill("SIGKILL");
-          this.addLog(processId, "[系统] 强制终止进程 (SIGKILL)");
-        } catch (error) {
+          let killSuccess = false;
+          if (isWindows) {
+            // Windows 不支持信号，直接 kill
+            killSuccess = childProcess.kill();
+            if (killSuccess) {
+              this.addLog(processId, "[系统] 强制终止进程 (Windows)");
+            } else {
+              this.addLog(processId, "[警告] kill() 返回 false，进程可能无法终止");
+              // 尝试使用系统命令强制终止（/T 参数终止整个进程树，包括子进程）
+              if (info.pid) {
+                try {
+                  exec(`taskkill /F /T /PID ${info.pid}`, (error) => {
+                    if (!error) {
+                      this.addLog(processId, `[系统] 使用 taskkill /T 强制终止进程树 PID ${info.pid}（包括所有子进程）`);
+                    }
+                  });
+                } catch (e) {
+                  // 忽略错误
+                }
+              }
+            }
+          } else {
+            killSuccess = childProcess.kill("SIGKILL");
+            if (killSuccess) {
+              this.addLog(processId, "[系统] 强制终止进程 (SIGKILL)");
+            } else {
+              this.addLog(processId, "[警告] kill(SIGKILL) 返回 false，进程可能无法终止");
+              // 尝试使用系统命令强制终止
+              if (info.pid) {
+                try {
+                  exec(`kill -9 ${info.pid}`, (error) => {
+                    if (!error) {
+                      this.addLog(processId, `[系统] 使用 kill -9 强制终止进程 PID ${info.pid}`);
+                    }
+                  });
+                } catch (e) {
+                  // 忽略错误
+                }
+              }
+            }
+          }
+          // 更新状态
+          if (info.status === "running") {
+            info.status = "stopped";
+          }
+        } catch (error: unknown) {
           // 进程可能已经退出
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          this.addLog(processId, `[警告] 强制终止时出错: ${errorMessage}`);
         }
-        resolve(true);
+        safeResolve(true);
       }, 5000); // 5秒超时
+
+      // 注册 exit 监听器（使用 once 避免重复触发）
+      const exitHandler = () => {
+        if (isResolved) return;
+        clearTimeout(killTimeout);
+        if (info.status === "running") {
+          info.status = "stopped";
+        }
+        safeResolve(true);
+      };
+
+      // 如果进程已经退出，立即处理
+      if (childProcess.killed || childProcess.exitCode !== null) {
+        clearTimeout(killTimeout);
+        info.status = "stopped";
+        safeResolve(true);
+        return;
+      }
 
       // 尝试优雅退出
       try {
-        process.kill("SIGTERM");
-        this.addLog(processId, "[系统] 发送终止信号 (SIGTERM)");
+        let killSuccess = false;
+        if (isWindows) {
+          // Windows 上直接 kill，没有 SIGTERM
+          // 注意：由于使用 shell: true，childProcess.pid 是 cmd.exe 的 PID
+          // kill() 只会终止 cmd.exe，子进程（如 python）可能继续运行
+          // 因此优先使用 taskkill /T 来终止整个进程树
+          killSuccess = childProcess.kill();
+          if (killSuccess) {
+            this.addLog(processId, "[系统] 发送终止信号 (Windows)");
+            // 同时使用 taskkill /T 确保终止所有子进程
+            if (info.pid) {
+              try {
+                exec(`taskkill /F /T /PID ${info.pid}`, (error) => {
+                  if (!error) {
+                    this.addLog(processId, `[系统] 使用 taskkill /T 终止进程树 PID ${info.pid}（确保所有子进程被终止）`);
+                  }
+                });
+              } catch (e) {
+                // 忽略错误
+              }
+            }
+          } else {
+            this.addLog(processId, "[警告] kill() 返回 false，尝试使用 taskkill /T");
+            // 如果 kill() 失败，直接使用 taskkill /T
+            if (info.pid) {
+              try {
+                exec(`taskkill /F /T /PID ${info.pid}`, (error) => {
+                  if (!error) {
+                    killSuccess = true; // 更新成功状态
+                    this.addLog(processId, `[系统] 使用 taskkill /T 终止进程树 PID ${info.pid}`);
+                  }
+                });
+              } catch (e) {
+                // 忽略错误
+              }
+            }
+          }
+        } else {
+          killSuccess = childProcess.kill("SIGTERM");
+          if (killSuccess) {
+            this.addLog(processId, "[系统] 发送终止信号 (SIGTERM)");
+          } else {
+            this.addLog(processId, "[警告] kill(SIGTERM) 返回 false，尝试 SIGKILL");
+            // 如果 SIGTERM 失败，直接尝试 SIGKILL
+            const killKillSuccess = childProcess.kill("SIGKILL");
+            if (killKillSuccess) {
+              killSuccess = true; // 更新成功状态
+              this.addLog(processId, "[系统] 直接发送 SIGKILL 信号");
+            } else {
+              this.addLog(processId, "[警告] kill(SIGKILL) 也返回 false");
+            }
+          }
+        }
 
-        process.once("exit", () => {
+        // 如果 kill 失败且进程还在运行，标记为错误
+        if (!killSuccess && !childProcess.killed && childProcess.exitCode === null) {
           clearTimeout(killTimeout);
-          info.status = "stopped";
-          resolve(true);
-        });
-      } catch (error: any) {
+          info.status = "error";
+          this.addLog(processId, "[错误] 无法发送终止信号给进程");
+          safeResolve(false);
+          return;
+        }
+
+        // 注册 exit 监听器
+        childProcess.once("exit", exitHandler);
+      } catch (error: unknown) {
         clearTimeout(killTimeout);
-        info.status = "error";
-        this.addLog(processId, `[错误] 停止失败: ${error.message}`);
-        resolve(false);
+        // 如果 kill 失败，可能是进程已经退出
+        if (childProcess.killed || childProcess.exitCode !== null) {
+          info.status = "stopped";
+          safeResolve(true);
+        } else {
+          info.status = "error";
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          this.addLog(processId, `[错误] 停止失败: ${errorMessage}`);
+          safeResolve(false);
+        }
       }
     });
   }
@@ -246,9 +423,14 @@ class ProcessManager {
       (p) => p.status === "running" && p.process
     );
     
+    const isWindows = process.platform === "win32";
     runningProcesses.forEach((p) => {
       try {
-        p.process?.kill("SIGKILL");
+        if (isWindows) {
+          p.process?.kill();
+        } else {
+          p.process?.kill("SIGKILL");
+        }
       } catch (error) {
         // 忽略错误
       }
