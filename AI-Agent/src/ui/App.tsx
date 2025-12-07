@@ -1,4 +1,4 @@
-import React, { FC, useState, useEffect, useMemo, useRef } from "react";
+import { FC, useState, useEffect, useMemo, useRef } from "react";
 import { Box, Text, Static, useApp } from "ink";
 import { useRequest } from "ahooks";
 import { marked } from "marked";
@@ -308,8 +308,71 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
           "system",
           `=== Session List ===
 ${report}
-Use /switch <id> to change.`,
+Use /switch <id> to change, /delete <id> to delete.`,
         );
+        return;
+      }
+      if (input.startsWith("/delete ")) {
+        const targetId = input.replace("/delete ", "").trim();
+
+        // 验证目标会话ID
+        if (!targetId) {
+          await addMessage("system", "❌ Please specify a session ID to delete. Usage: /delete <session_id>");
+          return;
+        }
+
+        // 检查会话是否存在
+        const targetSession = sessionList.find(s =>
+          s.metadata?.thread_id === targetId ||
+          s.metadata?.thread_id?.includes(targetId)
+        );
+
+        if (!targetSession) {
+          await addMessage("system", `❌ Session not found: ${targetId}\nUse /list to see available sessions.`);
+          return;
+        }
+
+        const fullSessionId = targetSession.metadata?.thread_id!;
+        const sessionTitle = targetSession.metadata?.title || "Untitled";
+
+        try {
+          // 处理删除当前活跃会话的情况
+          if (fullSessionId === threadId) {
+            // 检查是否有其他会话可以切换
+            const otherSessions = sessionList.filter(s => s.metadata?.thread_id !== threadId);
+
+            if (otherSessions.length > 0) {
+              // 有其他会话，先切换到最近的会话，再删除当前会话
+              const nextSession = otherSessions[0];
+              const nextSessionId = nextSession.metadata?.thread_id!;
+
+              // 先切换到新会话
+              await switchSession(nextSessionId);
+
+              // 然后记录系统消息到新会话
+              await addMessage("system", `✅ Deleted current session: ${fullSessionId} (${sessionTitle})\n🔄 Automatically switched to: ${nextSessionId}`);
+
+              // 最后删除原会话
+              await storage.sessions.deleteSession(fullSessionId);
+            } else {
+              // 没有其他会话，先创建新会话
+              const newSessionId = await createNewSession();
+
+              // 记录系统消息到新会话
+              await addMessage("system", `✅ Deleted current session: ${fullSessionId} (${sessionTitle})\n🆕 Created new session: ${newSessionId}`);
+
+              // 最后删除原会话
+              await storage.sessions.deleteSession(fullSessionId);
+            }
+          } else {
+            // 删除非当前会话
+            await storage.sessions.deleteSession(fullSessionId);
+            await addMessage("system", `✅ Successfully deleted session: ${fullSessionId} (${sessionTitle})`);
+          }
+        } catch (error: any) {
+          console.error("Delete session error:", error);
+          await addMessage("system", `❌ Failed to delete session: ${error.message}`);
+        }
         return;
       }
 

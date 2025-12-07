@@ -58,8 +58,7 @@ export type EventType =
   | 'tool_call'
   | 'system_summarize'
   | 'error'
-  | 'session_created'
-  | 'session_updated';
+  | 'session_created';
 
 // 历史事件记录
 export interface HistoryRecord {

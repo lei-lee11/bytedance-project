@@ -307,8 +307,7 @@ export class HistoryManager {
       'tool_call': '🔧',
       'system_summarize': '📋',
       'error': '❌',
-      'session_created': '🆕',
-      'session_updated': '✏️'
+      'session_created': '🆕'
     };
     return emojiMap[eventType] || '📝';
   }

@@ -42,7 +42,6 @@ export const toUIMessage = (record: HistoryRecord): UIMessage => {
 
     case "system_summarize":
     case "session_created":
-    case "session_updated":
     case "error":
     default:
       return { ...base, role: "system" };
@@ -59,6 +58,6 @@ export const toBackendEventType = (role: string): EventType => {
     case "tool":
       return "tool_call";
     default:
-      return "session_updated"; // 或者 system_summarize
+      return "system_summarize"; // 改为 system_summarize，避免创建 session_updated
   }
 };

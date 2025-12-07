@@ -509,6 +509,31 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
                         console.warn(`⚠️ 跳过空内容的其他类型消息:`, messageType);
                     }
                 }
+
+                // 处理其他系统事件类型
+                if (messageType === 'error') {
+                    // 错误事件 - 高优先级
+                    await this.storage.history.addHistoryRecord(threadId, {
+                        event_type: 'error',
+                        content: message.content as string,
+                        display_priority: 'high',
+                        metadata: {
+                            message_id: messageId,
+                            message_type: messageType
+                        }
+                    });
+                } else if (messageType === 'session_created' || messageType === 'system_summarize') {
+                    // 系统事件 - 低优先级
+                    await this.storage.history.addHistoryRecord(threadId, {
+                        event_type: messageType,
+                        content: message.content as string,
+                        display_priority: 'low',
+                        metadata: {
+                            message_id: messageId,
+                            message_type: messageType
+                        }
+                    });
+                }
             } catch (messageError) {
                 console.warn(`⚠️ 保存消息历史记录失败:`, messageError);
                 // 继续处理下一个消息，不要中断整个流程
@@ -593,7 +618,8 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
                     historyCount: 0
                 };
                 // console.log(`✅ 会话创建成功: ${threadId}`);
-            } else {
+            }
+            else {
                 // console.log(`📋 使用现有会话: ${threadId}`);
                 const metadata1 = sessionInfo.metadata
                 // 自动激活归档会话
