@@ -78,7 +78,7 @@ export class FileManager {
       const content = await fs.readFile(metadataPath, 'utf8');
       const trimmed = content.trim();
       if (!trimmed) {
-        console.warn(`⚠️ Metadata file is empty for session ${threadId}`);
+        // console.warn(`⚠️ Metadata file is empty for session ${threadId}`);
         return null;
       }
       return JSON.parse(trimmed) as SessionMetadata;
@@ -87,7 +87,7 @@ export class FileManager {
         return null;
       }
       if (error instanceof SyntaxError) {
-        console.warn(`⚠️ Invalid JSON in metadata file for session ${threadId}: ${error.message}`);
+        // console.warn(`⚠️ Invalid JSON in metadata file for session ${threadId}: ${error.message}`);
         return null;
       }
       throw new Error(`Failed to read metadata for session ${threadId}: ${error}`);
@@ -267,20 +267,97 @@ export class FileManager {
     lastModified: number;
     size: number;
   }> {
-    const { sessionDir } = this.getSessionPaths(threadId);
+    const { sessionDir, metadataPath, checkpointsPath, historyPath } = this.getSessionPaths(threadId);
 
     try {
-      const [checkpoints, history, stats] = await Promise.all([
+      const [checkpoints, history] = await Promise.all([
         this.readCheckpoints(threadId),
-        this.readHistory(threadId),
-        fs.stat(sessionDir).catch(() => null)
+        this.readHistory(threadId)
       ]);
+
+      // 计算会话文件夹中所有文件的实际大小
+      const calculateTotalSize = async (dirPath: string): Promise<number> => {
+        try {
+          const files = await fs.readdir(dirPath);
+          let totalSize = 0;
+
+          for (const file of files) {
+            const filePath = path.join(dirPath, file);
+            const stat = await fs.stat(filePath);
+
+            if (stat.isDirectory()) {
+              // 递归计算子目录大小
+              totalSize += await calculateTotalSize(filePath);
+            } else {
+              // 累加文件大小
+              totalSize += stat.size;
+            }
+          }
+
+          return totalSize;
+        } catch (error) {
+          // 如果目录不存在或无法读取，返回 0
+          return 0;
+        }
+      };
+
+      // 计算各文件的大小作为备选方案
+      const getFileSize = async (filePath: string): Promise<number> => {
+        try {
+          const stat = await fs.stat(filePath);
+          return stat.size;
+        } catch {
+          return 0;
+        }
+      };
+
+      // 优先使用递归计算的总大小，如果失败则使用估算方法
+      const totalDirSize = await calculateTotalSize(sessionDir);
+
+      let actualSize = totalDirSize;
+
+      // 如果递归计算结果为0，使用文件大小估算作为备选
+      if (actualSize === 0) {
+        const [metadataSize, checkpointsSize, historySize] = await Promise.all([
+          getFileSize(metadataPath),
+          getFileSize(checkpointsPath),
+          getFileSize(historyPath)
+        ]);
+
+        // 计算文件内容的大致大小
+        const checkpointsDataSize = checkpoints.reduce((sum, cp) =>
+          sum + JSON.stringify(cp).length, 0) * 2; // UTF-16 编码估算
+        const historyDataSize = history.reduce((sum, record) =>
+          sum + JSON.stringify(record).length, 0) * 2;
+
+        actualSize = metadataSize + checkpointsSize + historySize + checkpointsDataSize + historyDataSize;
+      }
+
+      // 获取最后修改时间
+      let lastModified = 0;
+      try {
+        const dirStats = await fs.stat(sessionDir);
+        lastModified = dirStats.mtime.getTime();
+      } catch {
+        // 如果无法获取目录状态，使用文件的最大修改时间
+        const fileStats = await Promise.allSettled([
+          fs.stat(metadataPath),
+          fs.stat(checkpointsPath),
+          fs.stat(historyPath)
+        ]);
+
+        for (const result of fileStats) {
+          if (result.status === 'fulfilled') {
+            lastModified = Math.max(lastModified, result.value.mtime.getTime());
+          }
+        }
+      }
 
       return {
         checkpointsCount: checkpoints.length,
         historyCount: history.length,
-        lastModified: stats?.mtime.getTime() || 0,
-        size: stats?.size || 0
+        lastModified,
+        size: actualSize
       };
     } catch (error) {
       throw new Error(`Failed to get session stats for ${threadId}: ${error}`);

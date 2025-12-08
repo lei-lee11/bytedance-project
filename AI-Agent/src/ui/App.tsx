@@ -346,7 +346,8 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
           "system",
           `=== Session List ===
 ${report}
-Use /switch <id> to change, /delete <id> to delete.`,
+Use /switch <id> to change, /delete <id> to delete.
+Use /getSessionInfo <id> to view detailed session information.`,
         );
         return;
       }
@@ -450,6 +451,87 @@ Use /switch <id> to change, /delete <id> to delete.`,
             "system",
             `❌ Failed to delete session: ${error.message}`,
           );
+        }
+        return;
+      }
+
+      // 处理 /getSessionInfo 命令
+      if (input === "/getSessionInfo" || input.startsWith("/getSessionInfo ")) {
+        const targetId = input.startsWith("/getSessionInfo ")
+          ? input.replace("/getSessionInfo ", "").trim()
+          : threadId; // 默认显示当前会话信息
+
+        if (!targetId) {
+          await addMessage("system", "❌ No active session. Use /getSessionInfo <session_id> to specify a session.");
+          return;
+        }
+
+        try {
+          // 获取会话详细信息
+          const sessionInfo = await storage.sessions.getSessionInfo(targetId);
+
+          if (!sessionInfo) {
+            await addMessage("system", `❌ Session not found: ${targetId}\nUse /list to see available sessions.`);
+            return;
+          }
+
+          // 格式化会话信息为美观的展示
+          const { metadata, hasActiveCheckpoint, checkpointCount, historyCount } = sessionInfo;
+
+          // 计算会话持续时间
+          const createdDate = new Date(metadata.created_at);
+          const updatedDate = new Date(metadata.updated_at);
+          const duration = updatedDate.getTime() - createdDate.getTime();
+          const durationMinutes = Math.floor(duration / (1000 * 60));
+          const durationHours = Math.floor(durationMinutes / 60);
+          const durationDays = Math.floor(durationHours / 24);
+
+          let durationStr = "";
+          if (durationDays > 0) {
+            durationStr = `${durationDays}天 ${durationHours % 24}小时`;
+          } else if (durationHours > 0) {
+            durationStr = `${durationHours}小时 ${durationMinutes % 60}分钟`;
+          } else if (durationMinutes > 0) {
+            durationStr = `${durationMinutes}分钟`;
+          } else {
+            durationStr = "刚刚创建";
+          }
+
+          // 获取会话统计信息
+          const sessionStats = await storage.sessions.getSessionStats(targetId);
+
+          const sessionInfoDisplay = `
+🔍 会话详细信息
+═══════════════════════════════════════════════════════════════
+
+📋 基本信息
+  🆔 会话ID: ${metadata.thread_id}
+  📝 标题: ${metadata.title}
+  📊 状态: ${metadata.status === 'active' ? '🟢 活跃' : '📦 归档'}
+  💬 消息数量: ${metadata.message_count}
+
+📅 时间信息
+  🕐 创建时间: ${createdDate.toLocaleString('zh-CN')}
+  🔄 最后更新: ${updatedDate.toLocaleString('zh-CN')}
+  ⏱️ 会话持续时间: ${durationStr}
+
+💾 存储信息
+  📦 检查点数量: ${checkpointCount}
+  📜 历史记录数量: ${historyCount}
+  ${hasActiveCheckpoint ? '✅ 有活跃检查点' : '❌ 无活跃检查点'}
+
+📊 存储统计
+  📁 存储大小: ${(sessionStats.size / 1024).toFixed(2)} KB
+
+═══════════════════════════════════════════════════════════════
+${targetId === threadId ? '✨ 这是当前活跃的会话' : ''}
+`.trim();
+
+          await addMessage("system", sessionInfoDisplay);
+
+        } catch (error: any) {
+          console.error("Get session info error:", error);
+          await addMessage("system", `❌ Failed to get session info: ${error.message}`);
         }
         return;
       }
