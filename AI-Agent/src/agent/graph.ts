@@ -11,6 +11,9 @@ import {
   reviewNode,
 } from "./nodes.ts";
 import { MemorySaver } from "@langchain/langgraph";
+import { MongoDBSaver } from "@langchain/langgraph-checkpoint-mongodb"
+import { MongoClient } from "mongodb";
+const client = new MongoClient("mongodb://localhost:27017/AI-Agent-Test");
 /**
  * 构建 Graph
  */
@@ -71,6 +74,7 @@ export async function initializeGraph(
   );
 
   const checkpointer = await initializeCheckpointer();
+  //const checkpointer = new MongoDBSaver({client});
   const workflow = buildGraph();
 
   // 根据模式决定是否启用人工审批

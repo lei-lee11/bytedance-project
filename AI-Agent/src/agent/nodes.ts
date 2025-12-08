@@ -197,32 +197,55 @@ export async function initializeNode(state: AgentState) {
  * 规划节点
  * 合并了 projectPlannerNode 和 taskPlannerNode
  */
-export async function plannerNode(state: AgentState) {
-  //console.log("[planner] 开始规划");
+// src/agent/nodes.ts
 
-  // 如果已经有 todos 且还有未完成的任务，跳过规划
-  if (
-    state.todos &&
-    state.todos.length > 0 &&
-    state.currentTodoIndex < state.todos.length
-  ) {
-    //console.log("[planner] 已有未完成的任务列表，跳过规划");
+export async function plannerNode(state: AgentState) {
+  // console.log("[planner] 开始规划");
+
+  // 获取最后一条消息
+  const lastMessage = state.messages[state.messages.length - 1];
+  
+  // 🛡️ [去重保护] 防止 Graph 自身循环导致的重复规划
+  // 只有当最后一条消息是 "系统生成的规划确认" 时，才跳过。
+  // 这意味着：如果是用户刚发的消息，或者 Executor 转过来的，我们都要规划！
+  const isLastMessagePlanConfirmation = 
+    lastMessage?.content && 
+    String(lastMessage.content).includes("生成了") && 
+    String(lastMessage.content).includes("个任务");
+
+  if (isLastMessagePlanConfirmation) {
+    // console.log("[planner] 刚刚已经规划过了，跳过重复执行，进入执行阶段");
     return new Command({
-      update: { taskStatus: "executing" as const },
+      // 不更新 messages
       goto: "executor",
     });
   }
 
-  const lastUser = state.messages[state.messages.length - 1];
+  // 🔥 [关键修改] 删除了 "if (state.todos.length > 0) return executor" 的逻辑
+  // 解释：只要流程走到了 Planner，就说明 Classifier 认为用户有新的意图，
+  // 我们必须无视旧的 todos，生成新的 Plan。
+
   const projectRoot = state.projectRoot || ".";
+  
+  // 查找最近的用户输入（作为需求来源）
+  // 倒序查找最近的一条 HumanMessage
+  const lastUserMsg = state.messages
+    .slice()
+    .reverse()
+    .find(m => m._getType() === "human");
+    
+  const userRequest = lastUserMsg ? lastUserMsg.content : "";
 
   // 1. 项目规划
-  // console.log("[planner] 生成项目规划");
   const projectPlanSystem = new SystemMessage({
     content: [
       "你是架构规划助手，只负责决定技术栈和项目结构。",
       "输出结构化结果：projectPlanText, techStackSummary, projectInitSteps。",
       "projectInitSteps 必须是可以直接执行的工程级初始化步骤。",
+      "",
+      "⚠️ **重要约束**:",
+      "1. 步骤只能是动作描述，例如：'创建文件 xxx.js'。",
+      "2. 绝对禁止包含具体代码实现。",
     ].join("\n"),
   });
 
@@ -230,7 +253,7 @@ export async function plannerNode(state: AgentState) {
     content: [
       `项目根目录：\`${projectRoot}\``,
       "用户需求：",
-      lastUser?.content ?? "",
+      String(userRequest),
     ].join("\n"),
   });
 
@@ -247,22 +270,11 @@ export async function plannerNode(state: AgentState) {
     : [];
 
   // 2. 任务拆解
-  //console.log("[planner] 生成任务列表");
   const taskPlanSystem = new SystemMessage({
     content: [
       "你是开发任务拆解助手，负责生成高效、可执行的任务列表。",
-      "",
-      "**重要原则**:",
-      "1. 生成大粒度任务 - 每个任务应该完成一个完整的功能模块",
-      "2. 任务数量控制在3-5个 - 避免过度拆分",
-      "3. 每个任务应该包含多个相关的小步骤",
-      "4. 任务描述要具体明确，包含目标和验收标准",
-      "",
-      "**示例**:",
-      "❌ 错误: 创建HTML文件 → 添加head标签 → 添加body标签 → 添加样式 (过度拆分)",
-      "✅ 正确: 创建完整的HTML页面，包含结构、样式和交互功能",
-      "",
       "只输出结构化字段 todos（string[]）。",
+      "任务粒度要适中，通常 3-5 个步骤。",
     ].join("\n"),
   });
 
@@ -270,20 +282,19 @@ export async function plannerNode(state: AgentState) {
     content: [
       "===== 项目规划 =====",
       projectPlanText,
-      "",
       "===== 初始化步骤 =====",
       projectInitSteps.map((s, i) => `${i + 1}. ${s}`).join("\n"),
-      "",
       "===== 用户需求 =====",
-      lastUser?.content ?? "",
+      String(userRequest),
     ].join("\n"),
   });
+  
   const taskModel = baseModel.withStructuredOutput(TaskPlanSchema);
   const taskPlan = await taskModel.invoke([taskPlanSystem, taskPlanUser]);
 
   const todos = Array.isArray(taskPlan.todos) ? taskPlan.todos : [];
-  // console.log("todos:", todos);
-  // console.log(`[planner] 生成了 ${todos.length} 个任务`);
+  
+  // console.log(`[planner] 新规划生成完毕: ${todos.length} 个任务`);
 
   return new Command({
     update: {
@@ -294,19 +305,24 @@ export async function plannerNode(state: AgentState) {
       projectPlanText,
       techStackSummary,
       projectInitSteps,
-      todos,
-      currentTodoIndex: 0,
+      // 🔥 强制覆盖旧任务
+      todos, 
+      // 🔥 强制重置进度
+      currentTodoIndex: 0, 
       taskStatus: "executing" as const,
+      // 🔥 重置循环计数器，给新任务一个干净的开始
+      iterationCount: 0, 
     },
     goto: "executor",
   });
 }
+
 /**
  * 执行节点
  * 核心的 agent 逻辑，使用 Command 进行路由
  */
 export async function executorNode(state: AgentState) {
-  //console.log("[executor] 开始执行");
+  console.log("[executor] 开始执行");
 
   const {
     messages,
@@ -320,7 +336,7 @@ export async function executorNode(state: AgentState) {
 
   // 循环保护 - 更严格的检测
   if (iterationCount >= maxIterations) {
-    // console.error(`[executor] 达到最大迭代次数 ${maxIterations}，强制结束`);
+     console.error(`[executor] 达到最大迭代次数 ${maxIterations}，强制结束`);
     return new Command({
       update: {
         error: `达到最大迭代次数 ${maxIterations}`,
@@ -332,7 +348,7 @@ export async function executorNode(state: AgentState) {
 
   // 检查是否所有任务完成
   if (todos.length > 0 && currentTodoIndex >= todos.length) {
-    //console.log("[executor] 所有任务已完成");
+    console.log("[executor] 所有任务已完成");
     return new Command({
       update: {
         taskStatus: "completed" as const,
@@ -364,13 +380,13 @@ export async function executorNode(state: AgentState) {
       lastContent.substring(0, 50) === prevContent.substring(0, 50) &&
       lastContent.length > 10
     ) {
-      //console.warn(`[executor] 检测到重复AI回复，可能陷入循环`);
+      console.warn(`[executor] 检测到重复AI回复，可能陷入循环`);
 
       // 强制推进到下一个任务
       if (todos.length > 0) {
         const nextIndex = currentTodoIndex + 1;
         if (nextIndex >= todos.length) {
-          // console.log(`[executor] 所有任务已完成（循环检测触发）`);
+           console.log(`[executor] 所有任务已完成（循环检测触发）`);
           return new Command({
             update: {
               taskStatus: "completed" as const,
@@ -380,7 +396,7 @@ export async function executorNode(state: AgentState) {
           });
         }
 
-        //console.log(`[executor] 强制推进到任务 ${nextIndex + 1}`);
+        console.log(`[executor] 强制推进到任务 ${nextIndex + 1}`);
         return new Command({
           update: {
             currentTodoIndex: nextIndex,
@@ -407,18 +423,18 @@ export async function executorNode(state: AgentState) {
     const uniqueCalls = new Set(recentToolCalls);
     if (uniqueCalls.size === 1 && recentToolCalls[0]) {
       const repeatedTool = recentToolCalls[0];
-      // console.error(
-      //   `[executor] ⚠️ 检测到循环: ${repeatedTool} 被连续调用 ${recentToolCalls.length} 次`,
-      // );
+      console.error(
+        `[executor] ⚠️ 检测到循环: ${repeatedTool} 被连续调用 ${recentToolCalls.length} 次`,
+      );
 
-      // if (repeatedTool === "list_directory") {
-      //   console.error(
-      //     `[executor] 🔍 诊断: list_directory 循环通常是 projectRoot 配置错误`,
-      //   );
-      //   console.error(
-      //     `[executor] 当前 projectRoot: ${state.projectRoot || "未设置"}`,
-      //   );
-      // }
+      if (repeatedTool === "list_directory") {
+        console.error(
+          `[executor] 🔍 诊断: list_directory 循环通常是 projectRoot 配置错误`,
+        );
+        console.error(
+          `[executor] 当前 projectRoot: ${state.projectRoot || "未设置"}`,
+        );
+      }
 
       return new Command({
         update: {
@@ -769,16 +785,16 @@ export async function toolsNode(state: AgentState) {
 
   // 1. 检查输入消息
   if (lastMsg._getType() !== "ai" || !(lastMsg as any).tool_calls?.length) {
-    // console.error(
-    //   "[tools] ❌ 错误: 并没有检测到工具调用请求！最后一条消息是:",
-    //   lastMsg,
-    // );
+    console.error(
+      "[tools] ❌ 错误: 并没有检测到工具调用请求！最后一条消息是:",
+      lastMsg,
+    );
     return new Command({ goto: "executor" });
   }
 
   const toolCall = (lastMsg as any).tool_calls[0];
-  // console.log(`[tools] 🎯 Agent 想要执行: "${toolCall.name}"`);
-  // console.log(`[tools] 📦 参数:`, JSON.stringify(toolCall.args));
+  console.log(`[tools] 🎯 Agent 想要执行: "${toolCall.name}"`);
+  console.log(`[tools] 📦 参数:`, JSON.stringify(toolCall.args));
 
   try {
     // 2. 检查工具是否存在 (这是最常见的问题!)
