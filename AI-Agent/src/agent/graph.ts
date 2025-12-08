@@ -10,6 +10,7 @@ import {
   toolsNode,
   reviewNode,
 } from "./nodes.ts";
+import { MemorySaver } from "@langchain/langgraph";
 /**
  * 构建 Graph
  */
@@ -74,7 +75,8 @@ export async function initializeGraph(
 
   // 根据模式决定是否启用人工审批
   const compileOptions: any = {
-    checkpointer: checkpointer,
+    //checkpointer: checkpointer,
+    checkpointer: new MemorySaver(),
   };
 
   if (!demoMode) {

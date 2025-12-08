@@ -799,39 +799,88 @@ export async function executorNode(state: AgentState) {
 const toolsNodeBase = new ToolNode(tools);
 
 export async function toolsNode(state: AgentState) {
-  console.log("[tools] 执行工具");
+  console.log("🛑 [tools] === 进入工具节点调试模式 ===");
+
+  const lastMsg = state.messages[state.messages.length - 1];
+
+  // 1. 检查输入消息
+  if (lastMsg._getType() !== "ai" || !(lastMsg as any).tool_calls?.length) {
+    console.error(
+      "[tools] ❌ 错误: 并没有检测到工具调用请求！最后一条消息是:",
+      lastMsg,
+    );
+    return new Command({ goto: "executor" });
+  }
+
+  const toolCall = (lastMsg as any).tool_calls[0];
+  console.log(`[tools] 🎯 Agent 想要执行: "${toolCall.name}"`);
+  console.log(`[tools] 📦 参数:`, JSON.stringify(toolCall.args));
 
   try {
-    // 执行工具 - 传递 projectRoot 配置
-    const result = await toolsNodeBase.invoke(state, {
-      configurable: {
-        projectRoot: state.projectRoot || process.cwd(),
-      },
-    });
+    // 2. 检查工具是否存在 (这是最常见的问题!)
+    // 假设你的 toolsNodeBase 是通过 new ToolNode(tools) 创建的
+    // 我们这里没办法直接访问内部 tools 列表，所以我们要看 invoke 的结果
 
-    console.log("[tools] 工具执行完成");
+    console.log("[tools] 🚀 正在调用 toolsNodeBase.invoke...");
+    const result = await toolsNodeBase.invoke(state);
+
     console.log(
-      `[tools] 使用 projectRoot: ${state.projectRoot || process.cwd()}`,
+      "[tools] 📥 toolsNodeBase 返回原始数据:",
+      JSON.stringify(result, null, 2),
     );
 
-    // 返回到 executor
+    // 3. 关键检查: 是否生成了 messages
+    if (!result.messages || result.messages.length === 0) {
+      console.error(
+        `[tools] 😱 严重错误: 工具 "${toolCall.name}" 似乎没有被执行！`,
+      );
+      console.error(
+        `[tools] 可能原因: 工具名称定义不匹配。Agent 叫它 "${toolCall.name}"，但你定义的工具可能有不同名字？`,
+      );
+
+      // 强制返回一个错误消息，打破死循环
+      return new Command({
+        update: {
+          messages: [
+            new ToolMessage({
+              tool_call_id: toolCall.id,
+              content: `SYSTEM ERROR: Tool '${toolCall.name}' was not found or failed to execute silently. Please check tool definitions.`,
+              name: toolCall.name,
+            }),
+          ],
+          pendingToolCalls: [],
+        },
+        goto: "executor",
+      });
+    }
+
+    // 4. 成功情况
+    const outputMsg = result.messages[0];
+    console.log(
+      `[tools] ✅ 执行成功! 返回内容预览: ${(outputMsg.content as string).slice(0, 50)}...`,
+    );
+
     return new Command({
       update: {
-        ...result,
-        projectTreeInjected: false, // 重置，下次重新扫描
+        messages: result.messages,
+        pendingToolCalls: [],
+        projectTreeInjected: false,
       },
       goto: "executor",
     });
   } catch (error) {
-    console.error("[tools] 工具执行失败:", error);
+    console.error("[tools] 💥 工具执行炸了:", error);
 
     return new Command({
       update: {
         messages: [
-          new SystemMessage({
-            content: `工具执行失败: ${error}`,
+          new ToolMessage({
+            tool_call_id: toolCall.id,
+            content: `Error: ${error instanceof Error ? error.message : String(error)}`,
+            name: toolCall.name,
           }),
         ],
+        pendingToolCalls: [],
       },
       goto: "executor",
     });
@@ -842,25 +891,35 @@ export async function toolsNode(state: AgentState) {
  * 人工审批节点
  */
 export async function reviewNode(state: AgentState) {
-  console.log("[review] 等待人工审批");
+  console.log("👮 [review] === 进入审批节点调试模式 ===");
 
-  const { pendingToolCalls = [] } = state;
+  const lastMsg = state.messages[state.messages.length - 1];
+  console.log(`[review] 最后一条消息类型: ${lastMsg._getType()}`);
 
-  console.log("=== 人工审批请求 ===");
-  console.log(`待审批工具: ${pendingToolCalls.length} 个`);
+  // 情况 1: 用户拒绝 (前端通常会插入一条 ToolMessage 说 "User rejected")
+  if (
+    lastMsg._getType() === "tool" ||
+    (lastMsg.content && (lastMsg.content as string).includes("rejected"))
+  ) {
+    console.log("[review] 🛑 检测到拒绝信号，跳过工具执行，回 executor");
+    return new Command({ goto: "executor" });
+  }
 
-  pendingToolCalls.forEach((call, index) => {
-    console.log(`\n工具 ${index + 1}: ${call.name}`);
-    console.log(`参数: ${JSON.stringify(call.args, null, 2)}`);
-  });
+  // 情况 2: 用户批准
+  // 此时最后一条消息应该是 AI 之前发出的请求 (AIMessage 且带 tool_calls)
+  if (lastMsg._getType() === "ai" && (lastMsg as any).tool_calls?.length > 0) {
+    console.log("[review] ✅ 检测到待执行的工具，批准通过！");
+    console.log("[review] 🚀 正在跳转到 -> tools 节点...");
 
-  console.log("\n=== 审批完成，继续执行 ===\n");
+    // 🔥 核心修复：必须显式返回 goto: "tools"
+    return new Command({
+      goto: "tools",
+    });
+  }
 
-  // 这里会被 interruptBefore 中断
-  // 用户批准后继续到 tools
-
-  return new Command({
-    update: {},
-    goto: "tools",
-  });
+  // 情况 3: 异常状态
+  console.warn(
+    "[review] ⚠️ 这里的状态有点奇怪，既不是拒绝也不是待执行的工具，默认回 executor",
+  );
+  return new Command({ goto: "executor" });
 }

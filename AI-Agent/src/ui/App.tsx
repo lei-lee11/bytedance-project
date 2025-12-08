@@ -4,7 +4,6 @@ import { useRequest } from "ahooks";
 import { marked } from "marked";
 import TerminalRenderer from "marked-terminal";
 import { HumanMessage, ToolMessage } from "@langchain/core/messages";
-// 🔥 修改 1: 引入 initializeGraph 和 graph
 import { graph, initializeGraph } from "../agent/graph.js";
 import { Header } from "./components/Header.tsx";
 import { MinimalThinking } from "./components/MinimalThinking.tsx";
@@ -15,7 +14,8 @@ import { useSessionManager } from "./hooks/useSessionManager.ts";
 import { useMessageProcessor } from "./hooks/useMessageProcessor.ts";
 import { StatusBar } from "./components/StatusBar.tsx";
 import { Command } from "@langchain/langgraph";
-// ... marked 配置保持不变 ...
+
+// ... marked 配置 ...
 marked.setOptions({
   renderer: new TerminalRenderer({
     code: (code: any) => code,
@@ -28,7 +28,6 @@ marked.setOptions({
 type ToolState = { name: string; input: string };
 type PendingToolState = { name: string; args: any };
 
-// ... MarkdownText 和 StatusBadge 组件保持不变 ...
 export const MarkdownText = ({ content }: { content: string }) => {
   const formattedText = useMemo(() => {
     try {
@@ -57,14 +56,13 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
   const { exit } = useApp();
   const [showLogo, setShowLogo] = useState(true);
 
-  // 🔥 修改 2: 添加 Graph 初始化状态
   const [isGraphReady, setIsGraphReady] = useState(false);
   const [graphError, setGraphError] = useState<string | null>(null);
 
   const {
     activeSessionId: threadId,
     currentHistory: history,
-    isLoading: isSessionLoading, // 重命名一下以免混淆
+    isLoading: isSessionLoading,
     sessionList,
     createNewSession,
     switchSession,
@@ -83,11 +81,11 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
 
   const hasProcessedInitial = useRef(false);
 
-  // 🔥 修改 3: 初始化 Graph 的 Effect
+  // 初始化 Graph
   useEffect(() => {
     const init = async () => {
       try {
-        await initializeGraph(); // 等待图编译并赋值给全局 graph 变量
+        await initializeGraph();
         setIsGraphReady(true);
       } catch (err: any) {
         console.error("Graph initialization failed:", err);
@@ -114,6 +112,7 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
       }
       if (!threadId || !storage) return;
 
+      // 重置实时状态
       setCurrentAIContent("");
       setCurrentReasoning("");
       setCurrentTool(null);
@@ -126,8 +125,9 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
       };
 
       try {
+        // 构造输入：如果是恢复，使用 resume Command；否则发送 HumanMessage
         const inputs = isResume
-          ? new Command({ resume: "approved" }) // 使用 Command 明确指示恢复执行
+          ? new Command({ resume: "approved" })
           : {
               messages: [new HumanMessage(text!)],
               pendingFilePaths: pendingFiles,
@@ -140,8 +140,8 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
         let fullContent = "";
         let fullReasoning = "";
 
+        // 处理流式输出
         for await (const event of stream) {
-          // ... stream 处理逻辑保持不变 ...
           if (event.event === "on_chat_model_stream") {
             const chunk = event.data.chunk;
             const reasoningChunk =
@@ -165,6 +165,7 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
             });
           } else if (event.event === "on_tool_end") {
             setCurrentTool(null);
+            // 记录工具执行结果到 UI 历史
             await addMessage(
               "tool",
               event.data.output || "Executed",
@@ -174,90 +175,57 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
           }
         }
 
-        // --- AI 回复完成 ---
+        // --- 回合结束处理 ---
         if (fullContent || fullReasoning) {
+          // 将 AI 最终回复添加到 UI 历史
           await addMessage("ai", fullContent, fullReasoning);
           setCurrentAIContent("");
           setCurrentReasoning("");
           setCurrentTool(null);
 
+          // ✅ 仅更新会话元数据（用于列表展示），绝不触碰 checkpoints
           await storage.sessions.updateSessionMetadata(threadId, {
             status: "active",
+            // 可以在这里更新摘要，以便在列表中显示最新动态
+            // description: fullContent.slice(0, 50) + "..."
           });
         }
 
-        // --- 保存 Checkpoint (🔥 修复的部分) ---
-        const snapshot = await graph.getState(config);
-        const currentValues = snapshot.values as any; // 强制转换以便解构
-
-        const updatePayload = {
-          ...currentValues, // 继承 retryCount, projectTreeInjected 等所有字段
-          messages: currentValues.messages,
-          currentTask:
-            fullContent.slice(0, 50) ||
-            currentValues.currentTask ||
-            "Processing",
-          // ❌ 已彻底移除 programmingLanguage
-        };
-
-        if (storage.checkpoints) {
-          await storage.checkpoints.saveCheckpoint(
-            threadId,
-            updatePayload,
-            undefined, // 第三个参数是 checkpointId，传 undefined
-          );
-        } else {
-          // 兼容旧接口逻辑
-          await (storage.sessions as any).saveCheckpoint(
-            threadId,
-            updatePayload,
-            {
-              description: "Turn completed",
-              stepType: "agent",
-            },
-          );
-        }
+        // ❌ [已删除] 手动保存 Checkpoint 的代码块
+        // 之前这里的 storage.checkpoints.saveCheckpoint(...) 导致了元数据损坏
 
         // --- 处理中断 (Approval) ---
-        // 检查是否有需要审批的工具调用
+        // 获取当前最新状态（由 LangGraph 自动保存）
+        const snapshot = await graph.getState(config);
         const pendingToolCalls = snapshot.values.pendingToolCalls || [];
 
+        // 检查是否有挂起的工具调用
         if (pendingToolCalls.length > 0) {
-          const lastMsg =
-            snapshot.values.messages[snapshot.values.messages.length - 1];
+          // 优先从 state.pendingToolCalls 获取，这比解析 message 更准确
+          const toolCall = pendingToolCalls[0];
 
-          // 1. 尝试从最后一条消息获取
-          let toolData = null;
-
-          if (lastMsg?.tool_calls?.length) {
-            toolData = {
-              name: lastMsg.tool_calls[0].name,
-              args: lastMsg.tool_calls[0].args,
+          if (toolCall && toolCall.name) {
+            const toolData = {
+              name: toolCall.name,
+              args: toolCall.args || {},
             };
-          }
-          // 2. 兜底策略：如果消息里没找到，尝试直接从 state 的 pendingToolCalls 数组中获取
-          // (假设你的 Graph state 中 pendingToolCalls 存储了工具对象)
-          else if (pendingToolCalls[0] && pendingToolCalls[0].name) {
-            toolData = {
-              name: pendingToolCalls[0].name,
-              args: pendingToolCalls[0].args || {},
-            };
-          }
-
-          // 🔥 关键修复：只有当成功获取到 toolData 时，才设置审批状态
-          if (toolData) {
             setPendingTool(toolData);
             setAwaitingApproval(true);
           } else {
-            console.warn(
-              "Detected pending tool calls but could not extract tool data:",
-              pendingToolCalls,
-            );
-            // 可选：添加一条系统消息提示错误，避免界面卡死
-            await addMessage(
-              "system",
-              "⚠️ System paused for approval, but tool data is missing.",
-            );
+            // 兜底逻辑：尝试从最后一条消息解析
+            const lastMsg =
+              snapshot.values.messages[snapshot.values.messages.length - 1];
+            if (lastMsg?.tool_calls?.length) {
+              setPendingTool({
+                name: lastMsg.tool_calls[0].name,
+                args: lastMsg.tool_calls[0].args,
+              });
+              setAwaitingApproval(true);
+            } else {
+              console.warn(
+                "System paused for approval but no tool data found.",
+              );
+            }
           }
         }
       } catch (e: any) {
@@ -271,7 +239,6 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
 
   // --- 初始化 Effect ---
   useEffect(() => {
-    // 🔥 修改 4: 增加 !isGraphReady 的判断
     if (
       isSessionLoading ||
       !isGraphReady ||
@@ -305,11 +272,11 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
   // --- 处理用户提交 ---
   const { run: handleUserSubmit } = useRequest(
     async (val: string) => {
-      // ... 这里的逻辑基本保持不变 ...
       const input = val.trim();
       if (!input) return;
       if (showLogo) setShowLogo(false);
 
+      // --- 命令处理 ---
       if (input === "/new") {
         await createNewSession();
         return;
@@ -344,116 +311,67 @@ Use /switch <id> to change, /delete <id> to delete.`,
       }
       if (input.startsWith("/delete ")) {
         const targetId = input.replace("/delete ", "").trim();
-
-        // 验证目标会话ID
         if (!targetId) {
-          await addMessage(
-            "system",
-            "❌ Please specify a session ID to delete. Usage: /delete <session_id>",
-          );
+          await addMessage("system", "❌ Usage: /delete <session_id>");
           return;
         }
 
-        // 检查会话是否存在
         const targetSession = sessionList.find(
           (s) =>
             s.metadata?.thread_id === targetId ||
             s.metadata?.thread_id?.includes(targetId),
         );
 
-        if (!targetSession) {
-          await addMessage(
-            "system",
-            `❌ Session not found: ${targetId}\nUse /list to see available sessions.`,
-          );
-          return;
-        }
-
-        // 确保会话有有效的metadata和thread_id
-        if (!targetSession.metadata?.thread_id) {
-          await addMessage(
-            "system",
-            `❌ Invalid session data: Missing thread_id for session`,
-          );
+        if (!targetSession || !targetSession.metadata?.thread_id) {
+          await addMessage("system", `❌ Session not found: ${targetId}`);
           return;
         }
 
         const fullSessionId = targetSession.metadata.thread_id;
-        const sessionTitle = targetSession.metadata?.title || "Untitled";
-
         try {
-          // 处理删除当前活跃会话的情况
           if (fullSessionId === threadId) {
-            // 检查是否有其他会话可以切换
+            // 如果删除的是当前会话，尝试切换到其他会话或新建
             const otherSessions = sessionList.filter(
               (s) => s.metadata?.thread_id !== threadId,
             );
-
             if (otherSessions.length > 0) {
-              // 有其他会话，先切换到最近的会话，再删除当前会话
-              const nextSession = otherSessions[0];
-
-              // 确保下一个会话有有效的metadata和thread_id
-              if (!nextSession.metadata?.thread_id) {
-                await addMessage(
-                  "system",
-                  `❌ Invalid session data: Missing thread_id for next session`,
-                );
-                return;
-              }
-
-              const nextSessionId = nextSession.metadata.thread_id;
-
-              // 先切换到新会话
-              await switchSession(nextSessionId);
-
-              // 然后记录系统消息到新会话
+              await switchSession(otherSessions[0].metadata.thread_id);
+              await storage.sessions.deleteSession(fullSessionId);
               await addMessage(
                 "system",
-                `✅ Deleted current session: ${fullSessionId} (${sessionTitle})\n🔄 Automatically switched to: ${nextSessionId}`,
+                `✅ Deleted active session and switched.`,
               );
-
-              // 最后删除原会话
-              await storage.sessions.deleteSession(fullSessionId);
             } else {
-              // 没有其他会话，先创建新会话
-              const newSessionId = await createNewSession();
-
-              // 记录系统消息到新会话
+              const newId = await createNewSession();
+              await storage.sessions.deleteSession(fullSessionId);
               await addMessage(
                 "system",
-                `✅ Deleted current session: ${fullSessionId} (${sessionTitle})\n🆕 Created new session: ${newSessionId}`,
+                `✅ Deleted active session and created new one: ${newId}`,
               );
-
-              // 最后删除原会话
-              await storage.sessions.deleteSession(fullSessionId);
             }
           } else {
-            // 删除非当前会话
             await storage.sessions.deleteSession(fullSessionId);
-            await addMessage(
-              "system",
-              `✅ Successfully deleted session: ${fullSessionId} (${sessionTitle})`,
-            );
+            await addMessage("system", `✅ Deleted session: ${fullSessionId}`);
           }
         } catch (error: any) {
-          console.error("Delete session error:", error);
-          await addMessage(
-            "system",
-            `❌ Failed to delete session: ${error.message}`,
-          );
+          await addMessage("system", `❌ Failed to delete: ${error.message}`);
         }
         return;
       }
 
       if (!threadId) return;
 
+      // --- 正常对话处理 ---
       try {
         const processedResult = await processInput(input);
+
+        // 1. UI 立即显示用户消息
         await addMessage("user", processedResult.content, undefined, {
           ...processedResult.metadata,
           pendingFilePaths: processedResult.pendingFilePaths,
         });
+
+        // 2. 发送给 Agent
         sendMessage(
           processedResult.content,
           false,
@@ -467,9 +385,8 @@ Use /switch <id> to change, /delete <id> to delete.`,
     { manual: true },
   );
 
-  // --- 处理审批 ---
+  // --- 处理审批选择 ---
   const { run: handleApprovalSelect } = useRequest(
-    // ... 这里的逻辑保持不变 ...
     async (value: "approve" | "reject") => {
       if (!pendingTool || !threadId) return;
 
@@ -482,8 +399,10 @@ Use /switch <id> to change, /delete <id> to delete.`,
         await addMessage("system", content);
 
         if (isApproved) {
+          // 批准：带着 resume 指令继续
           sendMessage(null, true);
         } else {
+          // 拒绝：更新状态插入拒绝消息，然后带着 resume 指令继续
           const config = { configurable: { thread_id: threadId } };
           const snapshot = await graph.getState(config);
           const lastMsg =
@@ -498,8 +417,10 @@ Use /switch <id> to change, /delete <id> to delete.`,
                   content: "User rejected the tool execution.",
                 }),
             );
+            // 这里 updateState 是安全的，因为它通过 LangGraph API 操作
             await graph.updateState(config, { messages: rejectionMessages });
           }
+          // 拒绝后也需要 resume，让 LLM 看到 ToolMessage(rejected)
           sendMessage(null, true);
         }
       } catch (error) {
@@ -514,8 +435,8 @@ Use /switch <id> to change, /delete <id> to delete.`,
     return sessionList;
   }, [JSON.stringify(sessionList.map((s) => s.metadata?.thread_id))]);
 
-  // 🔥 修改 5: 更新 Loading 界面
-  // 如果 Session 在加载，或者 Graph 还没初始化完成
+  // --- 渲染部分 ---
+
   if (isSessionLoading || !isGraphReady) {
     return (
       <Box padding={1}>
@@ -528,7 +449,6 @@ Use /switch <id> to change, /delete <id> to delete.`,
     );
   }
 
-  // 如果 Graph 初始化失败
   if (graphError) {
     return (
       <Box padding={1}>
