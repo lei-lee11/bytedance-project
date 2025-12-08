@@ -75,14 +75,14 @@ export async function initializeGraph(
 
   // 根据模式决定是否启用人工审批
   const compileOptions: any = {
-    //checkpointer: checkpointer,
-    checkpointer: new MemorySaver(),
+    checkpointer: checkpointer,
+    //checkpointer: new MemorySaver(),
   };
 
   if (!demoMode) {
     // 生产模式: 启用人工审批
     compileOptions.interruptBefore = ["review"];
-    console.log("[graph] 启用人工审批机制");
+    // console.log("[graph] 启用人工审批机制");
   } else {
     // 演示模式: 跳过人工审批
     console.log("[graph] 演示模式: 跳过人工审批");

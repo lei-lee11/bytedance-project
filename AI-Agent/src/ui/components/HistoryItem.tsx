@@ -5,7 +5,11 @@ import { MarkdownText } from "../App.tsx";
 import { THEME } from "../utils/theme.ts";
 import { UIMessage } from "../utils/adapter.ts";
 import { tryParseStructuredOutput } from "../utils/formatStructuredOutput.ts";
-import { IntentOutput, ProjectPlanOutput, TodosOutput } from "./StructuredOutput.tsx";
+import {
+  IntentOutput,
+  ProjectPlanOutput,
+  TodosOutput,
+} from "./StructuredOutput.tsx";
 interface HistoryItemProps {
   item: UIMessage; // 直接使用定义好的接口
 }
@@ -28,9 +32,11 @@ export const HistoryItem: React.FC<HistoryItemProps> = ({ item }) => {
           {isSuccess ? "✔ " : "✖ "}
           {isSuccess ? "Executed: " : "Failed: "}
         </Text>
-        <Text color={isSuccess ? THEME.tool : "red"} bold>
-          {toolName}
-        </Text>
+        {toolName !== "project_tree " && (
+          <Text color={isSuccess ? THEME.tool : "red"} bold>
+            {toolName}
+          </Text>
+        )}
       </Box>
     );
   }
@@ -45,8 +51,9 @@ export const HistoryItem: React.FC<HistoryItemProps> = ({ item }) => {
   }
 
   // 尝试解析结构化输出
-  const structuredData = tryParseStructuredOutput(item.content) || 
-                         (item.reasoning ? tryParseStructuredOutput(item.reasoning) : null);
+  const structuredData =
+    tryParseStructuredOutput(item.content) ||
+    (item.reasoning ? tryParseStructuredOutput(item.reasoning) : null);
 
   // 如果检测到结构化输出，使用专门的展示组件
   if (structuredData) {
@@ -54,11 +61,11 @@ export const HistoryItem: React.FC<HistoryItemProps> = ({ item }) => {
       <Box flexDirection="column" marginBottom={1} gap={1}>
         {structuredData.map((item: any, idx: number) => {
           switch (item.type) {
-            case 'intent':
+            case "intent":
               return <IntentOutput key={idx} data={item.data} />;
-            case 'project_plan':
+            case "project_plan":
               return <ProjectPlanOutput key={idx} data={item.data} />;
-            case 'todos':
+            case "todos":
               return <TodosOutput key={idx} data={item.data} />;
             default:
               return null;
@@ -84,19 +91,6 @@ export const HistoryItem: React.FC<HistoryItemProps> = ({ item }) => {
         ) : item.role === "ai" ? (
           /* Case B: AI 回复 (包含推理过程) */
           <Box flexDirection="column">
-            {/* 推理部分 (如果存在且还没折叠) */}
-            {item.reasoning && (
-              <Box
-                borderStyle="single"
-                borderColor="gray"
-                paddingX={1}
-                marginBottom={1}
-              >
-                <Text color="gray" italic>
-                  {item.reasoning}
-                </Text>
-              </Box>
-            )}
             {/* 正文 */}
             <Box>
               <MarkdownText content={item.content} />

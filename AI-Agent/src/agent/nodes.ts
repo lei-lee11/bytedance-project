@@ -44,14 +44,14 @@ const IntentSchema = z.object({
  * 判断用户输入是编程任务还是闲聊
  */
 export async function intentClassifierNode(state: AgentState) {
-  console.log("[classifier] 开始意图分类");
+  //console.log("[classifier] 开始意图分类");
 
   try {
     // 获取最新的用户消息
     const lastMessage = state.messages[state.messages.length - 1];
     const userInput = lastMessage.content.toString();
 
-    console.log(`[classifier] 分析用户输入: ${userInput.substring(0, 100)}...`);
+    // console.log(`[classifier] 分析用户输入: ${userInput.substring(0, 100)}...`);
 
     // 使用结构化输出进行意图分类
     const classificationPrompt = buildIntentClassificationPrompt();
@@ -63,26 +63,26 @@ export async function intentClassifierNode(state: AgentState) {
       new HumanMessage(userInput),
     ]);
 
-    console.log(
-      `[classifier] 分类结果: ${result.intent}, 置信度: ${result.confidence}, 理由: ${result.reasoning}`,
-    );
+    // console.log(
+    //   `[classifier] 分类结果: ${result.intent}, 置信度: ${result.confidence}, 理由: ${result.reasoning}`,
+    // );
 
     // 根据意图路由
     if (result.intent === "task") {
-      console.log("[classifier] → 路由到 planner（任务模式）");
+      //console.log("[classifier] → 路由到 planner（任务模式）");
       return new Command({
         goto: "planner",
       });
     } else {
-      console.log("[classifier] → 路由到 chat（闲聊模式）");
+      // console.log("[classifier] → 路由到 chat（闲聊模式）");
       return new Command({
         goto: "chat",
       });
     }
   } catch (error) {
-    console.error("[classifier] 意图分类失败:", error);
+    //console.error("[classifier] 意图分类失败:", error);
     // 默认路由到闲聊，提供友好体验
-    console.log("[classifier] 错误处理 → 路由到 chat");
+    // console.log("[classifier] 错误处理 → 路由到 chat");
     return new Command({
       goto: "chat",
     });
@@ -94,7 +94,7 @@ export async function intentClassifierNode(state: AgentState) {
  * 处理非编程任务的对话
  */
 export async function chatNode(state: AgentState) {
-  console.log("[chat] 生成闲聊回复");
+  //console.log("[chat] 生成闲聊回复");
 
   try {
     // 使用完整的对话历史来生成回复
@@ -104,9 +104,9 @@ export async function chatNode(state: AgentState) {
       ...state.messages, // 传递完整的对话历史
     ]);
 
-    console.log(
-      `[chat] 回复: ${response.content.toString().substring(0, 100)}...`,
-    );
+    // console.log(
+    //   `[chat] 回复: ${response.content.toString().substring(0, 100)}...`,
+    // );
 
     // 返回回复并结束
     return new Command({
@@ -116,7 +116,7 @@ export async function chatNode(state: AgentState) {
       goto: END,
     });
   } catch (error) {
-    console.error("[chat] 生成回复失败:", error);
+    // console.error("[chat] 生成回复失败:", error);
 
     // 返回错误消息
     const errorMessage = new AIMessage({
@@ -138,7 +138,7 @@ export async function chatNode(state: AgentState) {
  * 合并了 processReferencedFiles 和 injectProjectTreeNode
  */
 export async function initializeNode(state: AgentState) {
-  console.log("[initialize] 开始初始化");
+  //console.log("[initialize] 开始初始化");
 
   const updates: Partial<AgentState> = {};
 
@@ -159,9 +159,9 @@ export async function initializeNode(state: AgentState) {
 
       updates.messages = [fileContextMessage];
       updates.pendingFilePaths = [];
-      console.log(`[initialize] 处理了 ${filePaths.length} 个文件`);
+      //console.log(`[initialize] 处理了 ${filePaths.length} 个文件`);
     } catch (error) {
-      console.error("[initialize] 文件处理失败:", error);
+      // console.error("[initialize] 文件处理失败:", error);
       updates.pendingFilePaths = [];
     }
   }
@@ -180,9 +180,9 @@ export async function initializeNode(state: AgentState) {
 
       updates.projectTreeText = treeText;
       updates.projectTreeInjected = true;
-      console.log("[initialize] 项目树扫描完成");
+      // console.log("[initialize] 项目树扫描完成");
     } catch (error) {
-      console.error("[initialize] 项目树扫描失败:", error);
+      // console.error("[initialize] 项目树扫描失败:", error);
     }
   }
 
@@ -198,7 +198,7 @@ export async function initializeNode(state: AgentState) {
  * 合并了 projectPlannerNode 和 taskPlannerNode
  */
 export async function plannerNode(state: AgentState) {
-  console.log("[planner] 开始规划");
+  //console.log("[planner] 开始规划");
 
   // 如果已经有 todos 且还有未完成的任务，跳过规划
   if (
@@ -206,7 +206,7 @@ export async function plannerNode(state: AgentState) {
     state.todos.length > 0 &&
     state.currentTodoIndex < state.todos.length
   ) {
-    console.log("[planner] 已有未完成的任务列表，跳过规划");
+    //console.log("[planner] 已有未完成的任务列表，跳过规划");
     return new Command({
       update: { taskStatus: "executing" as const },
       goto: "executor",
@@ -217,7 +217,7 @@ export async function plannerNode(state: AgentState) {
   const projectRoot = state.projectRoot || ".";
 
   // 1. 项目规划
-  console.log("[planner] 生成项目规划");
+  // console.log("[planner] 生成项目规划");
   const projectPlanSystem = new SystemMessage({
     content: [
       "你是架构规划助手，只负责决定技术栈和项目结构。",
@@ -247,7 +247,7 @@ export async function plannerNode(state: AgentState) {
     : [];
 
   // 2. 任务拆解
-  console.log("[planner] 生成任务列表");
+  //console.log("[planner] 生成任务列表");
   const taskPlanSystem = new SystemMessage({
     content: [
       "你是开发任务拆解助手，负责生成高效、可执行的任务列表。",
@@ -282,8 +282,8 @@ export async function plannerNode(state: AgentState) {
   const taskPlan = await taskModel.invoke([taskPlanSystem, taskPlanUser]);
 
   const todos = Array.isArray(taskPlan.todos) ? taskPlan.todos : [];
-  console.log("todos:", todos);
-  console.log(`[planner] 生成了 ${todos.length} 个任务`);
+  // console.log("todos:", todos);
+  // console.log(`[planner] 生成了 ${todos.length} 个任务`);
 
   return new Command({
     update: {
@@ -306,7 +306,7 @@ export async function plannerNode(state: AgentState) {
  * 核心的 agent 逻辑，使用 Command 进行路由
  */
 export async function executorNode(state: AgentState) {
-  console.log("[executor] 开始执行");
+  //console.log("[executor] 开始执行");
 
   const {
     messages,
@@ -320,7 +320,7 @@ export async function executorNode(state: AgentState) {
 
   // 循环保护 - 更严格的检测
   if (iterationCount >= maxIterations) {
-    console.error(`[executor] 达到最大迭代次数 ${maxIterations}，强制结束`);
+    // console.error(`[executor] 达到最大迭代次数 ${maxIterations}，强制结束`);
     return new Command({
       update: {
         error: `达到最大迭代次数 ${maxIterations}`,
@@ -332,7 +332,7 @@ export async function executorNode(state: AgentState) {
 
   // 检查是否所有任务完成
   if (todos.length > 0 && currentTodoIndex >= todos.length) {
-    console.log("[executor] 所有任务已完成");
+    //console.log("[executor] 所有任务已完成");
     return new Command({
       update: {
         taskStatus: "completed" as const,
@@ -364,13 +364,13 @@ export async function executorNode(state: AgentState) {
       lastContent.substring(0, 50) === prevContent.substring(0, 50) &&
       lastContent.length > 10
     ) {
-      console.warn(`[executor] 检测到重复AI回复，可能陷入循环`);
+      //console.warn(`[executor] 检测到重复AI回复，可能陷入循环`);
 
       // 强制推进到下一个任务
       if (todos.length > 0) {
         const nextIndex = currentTodoIndex + 1;
         if (nextIndex >= todos.length) {
-          console.log(`[executor] 所有任务已完成（循环检测触发）`);
+          // console.log(`[executor] 所有任务已完成（循环检测触发）`);
           return new Command({
             update: {
               taskStatus: "completed" as const,
@@ -380,7 +380,7 @@ export async function executorNode(state: AgentState) {
           });
         }
 
-        console.log(`[executor] 强制推进到任务 ${nextIndex + 1}`);
+        //console.log(`[executor] 强制推进到任务 ${nextIndex + 1}`);
         return new Command({
           update: {
             currentTodoIndex: nextIndex,
@@ -407,18 +407,18 @@ export async function executorNode(state: AgentState) {
     const uniqueCalls = new Set(recentToolCalls);
     if (uniqueCalls.size === 1 && recentToolCalls[0]) {
       const repeatedTool = recentToolCalls[0];
-      console.error(
-        `[executor] ⚠️ 检测到循环: ${repeatedTool} 被连续调用 ${recentToolCalls.length} 次`,
-      );
+      // console.error(
+      //   `[executor] ⚠️ 检测到循环: ${repeatedTool} 被连续调用 ${recentToolCalls.length} 次`,
+      // );
 
-      if (repeatedTool === "list_directory") {
-        console.error(
-          `[executor] 🔍 诊断: list_directory 循环通常是 projectRoot 配置错误`,
-        );
-        console.error(
-          `[executor] 当前 projectRoot: ${state.projectRoot || "未设置"}`,
-        );
-      }
+      // if (repeatedTool === "list_directory") {
+      //   console.error(
+      //     `[executor] 🔍 诊断: list_directory 循环通常是 projectRoot 配置错误`,
+      //   );
+      //   console.error(
+      //     `[executor] 当前 projectRoot: ${state.projectRoot || "未设置"}`,
+      //   );
+      // }
 
       return new Command({
         update: {
@@ -480,9 +480,6 @@ export async function executorNode(state: AgentState) {
     });
 
     if (allSimilar && messageContents[0].length > 10) {
-      console.error(`[executor] ⚠️ 检测到重复的 AI 回复,可能陷入循环`);
-      console.error(`[executor] 🛑 强制完成当前任务以打破循环`);
-
       // 强制完成当前任务
       const nextIndex = currentTodoIndex + 1;
       const allDone = nextIndex >= todos.length;
@@ -569,10 +566,6 @@ export async function executorNode(state: AgentState) {
         ].join("\n"),
       }),
     );
-
-    console.log(
-      `[executor] 当前任务 (${taskNumber}/${totalTasks}): ${currentTask.substring(0, 50)}...`,
-    );
   }
 
   // 添加摘要
@@ -588,10 +581,6 @@ export async function executorNode(state: AgentState) {
   const recentMessagesForContext = messages.slice(-20); // 只保留最近20条消息
   const fullMessages = [...contextMessages, ...recentMessagesForContext];
 
-  // 调用模型
-  console.log(
-    `[executor] 调用模型（迭代 ${iterationCount + 1}/${maxIterations}）`,
-  );
   const response = await modelWithTools.invoke(fullMessages);
 
   const newIterationCount = iterationCount + 1;
@@ -601,7 +590,6 @@ export async function executorNode(state: AgentState) {
   // 1. 如果有工具调用 - 这是正常的执行路径
   if (response.tool_calls?.length) {
     const toolNames = response.tool_calls.map((t) => t.name).join(", ");
-    console.log(`[executor] 检测到工具调用: ${toolNames}`);
 
     const hasSensitive = response.tool_calls.some((tool) =>
       SENSITIVE_TOOLS.includes(tool.name),
@@ -611,7 +599,6 @@ export async function executorNode(state: AgentState) {
     const demoMode = state.demoMode || false;
 
     if (hasSensitive && !demoMode) {
-      console.log(`[executor] 包含敏感工具，需要人工审批`);
       return new Command({
         update: {
           messages: [response],
@@ -620,12 +607,6 @@ export async function executorNode(state: AgentState) {
         },
         goto: "review",
       });
-    }
-
-    if (hasSensitive && demoMode) {
-      console.log(`[executor] 演示模式: 自动批准敏感工具`);
-    } else {
-      console.log(`[executor] 普通工具，直接执行`);
     }
 
     return new Command({
@@ -680,16 +661,7 @@ export async function executorNode(state: AgentState) {
     const nextIndex = currentTodoIndex + 1;
     const allDone = nextIndex >= todos.length;
 
-    if (stuckInLoop && !taskReallyCompleted) {
-      console.log(
-        `[executor] 检测到循环（无工具调用），强制完成任务 ${currentTodoIndex + 1}`,
-      );
-    } else {
-      console.log(`[executor] 任务 ${currentTodoIndex + 1} 完成`);
-    }
-
     if (allDone) {
-      console.log(`[executor] 所有任务已完成`);
       return new Command({
         update: {
           messages: [response],
@@ -702,7 +674,6 @@ export async function executorNode(state: AgentState) {
       });
     }
 
-    console.log(`[executor] 继续下一个任务`);
     return new Command({
       update: {
         messages: [response],
@@ -716,13 +687,10 @@ export async function executorNode(state: AgentState) {
 
   // 3. 如果是询问式回复,视为任务完成信号
   if (isAskingForHelp && hasRecentToolExecution) {
-    console.log(`[executor] 检测到询问式回复(有工具执行记录),视为任务完成`);
-
     const nextIndex = currentTodoIndex + 1;
     const allDone = nextIndex >= todos.length;
 
     if (allDone) {
-      console.log(`[executor] 所有任务已完成`);
       return new Command({
         update: {
           messages: [response],
@@ -735,7 +703,6 @@ export async function executorNode(state: AgentState) {
       });
     }
 
-    console.log(`[executor] 继续下一个任务`);
     return new Command({
       update: {
         messages: [response],
@@ -753,8 +720,6 @@ export async function executorNode(state: AgentState) {
     !hasRecentToolExecution &&
     newIterationCount >= 2
   ) {
-    console.log(`[executor] 检测到无意义回复,强制继续下一任务`);
-
     const nextIndex = currentTodoIndex + 1;
     const allDone = nextIndex >= todos.length;
 
@@ -783,7 +748,6 @@ export async function executorNode(state: AgentState) {
   }
 
   // 5. 继续当前任务
-  console.log(`[executor] 继续处理当前任务`);
   return new Command({
     update: {
       messages: [response],
@@ -799,44 +763,44 @@ export async function executorNode(state: AgentState) {
 const toolsNodeBase = new ToolNode(tools);
 
 export async function toolsNode(state: AgentState) {
-  console.log("🛑 [tools] === 进入工具节点调试模式 ===");
+  // console.log("🛑 [tools] === 进入工具节点调试模式 ===");
 
   const lastMsg = state.messages[state.messages.length - 1];
 
   // 1. 检查输入消息
   if (lastMsg._getType() !== "ai" || !(lastMsg as any).tool_calls?.length) {
-    console.error(
-      "[tools] ❌ 错误: 并没有检测到工具调用请求！最后一条消息是:",
-      lastMsg,
-    );
+    // console.error(
+    //   "[tools] ❌ 错误: 并没有检测到工具调用请求！最后一条消息是:",
+    //   lastMsg,
+    // );
     return new Command({ goto: "executor" });
   }
 
   const toolCall = (lastMsg as any).tool_calls[0];
-  console.log(`[tools] 🎯 Agent 想要执行: "${toolCall.name}"`);
-  console.log(`[tools] 📦 参数:`, JSON.stringify(toolCall.args));
+  // console.log(`[tools] 🎯 Agent 想要执行: "${toolCall.name}"`);
+  // console.log(`[tools] 📦 参数:`, JSON.stringify(toolCall.args));
 
   try {
     // 2. 检查工具是否存在 (这是最常见的问题!)
     // 假设你的 toolsNodeBase 是通过 new ToolNode(tools) 创建的
     // 我们这里没办法直接访问内部 tools 列表，所以我们要看 invoke 的结果
 
-    console.log("[tools] 🚀 正在调用 toolsNodeBase.invoke...");
+    //console.log("[tools] 🚀 正在调用 toolsNodeBase.invoke...");
     const result = await toolsNodeBase.invoke(state);
 
-    console.log(
-      "[tools] 📥 toolsNodeBase 返回原始数据:",
-      JSON.stringify(result, null, 2),
-    );
+    // console.log(
+    //   "[tools] 📥 toolsNodeBase 返回原始数据:",
+    //   JSON.stringify(result, null, 2),
+    // );
 
     // 3. 关键检查: 是否生成了 messages
     if (!result.messages || result.messages.length === 0) {
-      console.error(
-        `[tools] 😱 严重错误: 工具 "${toolCall.name}" 似乎没有被执行！`,
-      );
-      console.error(
-        `[tools] 可能原因: 工具名称定义不匹配。Agent 叫它 "${toolCall.name}"，但你定义的工具可能有不同名字？`,
-      );
+      // console.error(
+      //   `[tools] 😱 严重错误: 工具 "${toolCall.name}" 似乎没有被执行！`,
+      // );
+      // console.error(
+      //   `[tools] 可能原因: 工具名称定义不匹配。Agent 叫它 "${toolCall.name}"，但你定义的工具可能有不同名字？`,
+      // );
 
       // 强制返回一个错误消息，打破死循环
       return new Command({
@@ -856,9 +820,9 @@ export async function toolsNode(state: AgentState) {
 
     // 4. 成功情况
     const outputMsg = result.messages[0];
-    console.log(
-      `[tools] ✅ 执行成功! 返回内容预览: ${(outputMsg.content as string).slice(0, 50)}...`,
-    );
+    // console.log(
+    //   `[tools] ✅ 执行成功! 返回内容预览: ${(outputMsg.content as string).slice(0, 50)}...`,
+    // );
 
     return new Command({
       update: {
@@ -869,7 +833,7 @@ export async function toolsNode(state: AgentState) {
       goto: "executor",
     });
   } catch (error) {
-    console.error("[tools] 💥 工具执行炸了:", error);
+    // console.error("[tools] 💥 工具执行炸了:", error);
 
     return new Command({
       update: {
@@ -891,25 +855,25 @@ export async function toolsNode(state: AgentState) {
  * 人工审批节点
  */
 export async function reviewNode(state: AgentState) {
-  console.log("👮 [review] === 进入审批节点调试模式 ===");
+  //  console.log("👮 [review] === 进入审批节点调试模式 ===");
 
   const lastMsg = state.messages[state.messages.length - 1];
-  console.log(`[review] 最后一条消息类型: ${lastMsg._getType()}`);
+  //console.log(`[review] 最后一条消息类型: ${lastMsg._getType()}`);
 
   // 情况 1: 用户拒绝 (前端通常会插入一条 ToolMessage 说 "User rejected")
   if (
     lastMsg._getType() === "tool" ||
     (lastMsg.content && (lastMsg.content as string).includes("rejected"))
   ) {
-    console.log("[review] 🛑 检测到拒绝信号，跳过工具执行，回 executor");
+    //console.log("[review] 🛑 检测到拒绝信号，跳过工具执行，回 executor");
     return new Command({ goto: "executor" });
   }
 
   // 情况 2: 用户批准
   // 此时最后一条消息应该是 AI 之前发出的请求 (AIMessage 且带 tool_calls)
   if (lastMsg._getType() === "ai" && (lastMsg as any).tool_calls?.length > 0) {
-    console.log("[review] ✅ 检测到待执行的工具，批准通过！");
-    console.log("[review] 🚀 正在跳转到 -> tools 节点...");
+    // console.log("[review] ✅ 检测到待执行的工具，批准通过！");
+    // console.log("[review] 🚀 正在跳转到 -> tools 节点...");
 
     // 🔥 核心修复：必须显式返回 goto: "tools"
     return new Command({
@@ -918,8 +882,8 @@ export async function reviewNode(state: AgentState) {
   }
 
   // 情况 3: 异常状态
-  console.warn(
-    "[review] ⚠️ 这里的状态有点奇怪，既不是拒绝也不是待执行的工具，默认回 executor",
-  );
+  // console.warn(
+  //   "[review] ⚠️ 这里的状态有点奇怪，既不是拒绝也不是待执行的工具，默认回 executor",
+  // );
   return new Command({ goto: "executor" });
 }

@@ -3,39 +3,42 @@ import Spinner from "ink-spinner";
 import { Box, Text } from "ink";
 import { THEME } from "../utils/theme.ts";
 
-export const MinimalThinking: FC<{ content: string; toolName?: string }> = ({
-  content,
-  toolName,
-}) => {
+export const MinimalThinking: FC<{
+  content: string;
+  toolName?: string | null;
+}> = ({ content, toolName }) => {
   // 1. 提取最后一行非空内容
-  // 过滤掉空行，防止闪烁
+  // 过滤掉空行
   const lines = content.split("\n").filter((l) => l.trim().length > 0);
 
   // 2. 获取显示的文本
-  // 如果有工具在运行，优先显示工具名
-  // 否则显示最后一行思考日志，默认显示 "Thinking..."
   let displayText = toolName
     ? `Running tool: ${toolName}...`
     : lines.length > 0
-      ? lines[lines.length - 1]
+      ? lines[lines.length - 1] // 获取最后一行
       : "Thinking...";
 
-  // 3. 截断长文本
-  // CLI 宽度有限，太长会换行导致 Spinner 错位，这里限制为 70 字符
+  // 清理 Markdown 标记 (放在截断之前，保证内容的有效性)
+  displayText = displayText.replace(/^[#\-*]+\s*/, "");
+
+  // 3. 🔥 核心修改：截断长文本
+  // 如果文本超过 70 字符：
+  // 旧逻辑: slice(0, 67) -> 显示开头，导致长句看起来不动
+  // 新逻辑: slice(-67)   -> 显示【末尾】，让用户看到最新的动态
   if (displayText.length > 70) {
-    displayText = displayText.slice(0, 67) + "...";
+    displayText = "..." + displayText.slice(-67);
   }
 
   return (
-    <Box flexDirection="row" alignItems="center">
+    <Box flexDirection="row" alignItems="center" minHeight={1}>
       <Box marginRight={1}>
-        <Text color={THEME.aiAccent}>
-          <Spinner type="dots" />
+        {/* 工具运行和普通思考使用不同的 Spinner，视觉更丰富 */}
+        <Text color={toolName ? "yellow" : THEME.aiAccent}>
+          <Spinner type={toolName ? "arc" : "dots"} />
         </Text>
       </Box>
       <Text color={THEME.textDim} italic>
-        {/* 移除开头的 markdown 符号，让日志更像日志 */}
-        {displayText.replace(/^[#\-*]+\s*/, "")}
+        {displayText}
       </Text>
     </Box>
   );
