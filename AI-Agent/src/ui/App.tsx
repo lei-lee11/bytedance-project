@@ -8,6 +8,14 @@ import { HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { graph, initializeGraph } from "../agent/graph.js";
 import { Header } from "./components/Header.tsx";
 import { MinimalThinking } from "./components/MinimalThinking.tsx";
+import {
+  IntentOutput,
+  ProjectPlanOutput,
+  TodosOutput,
+} from "./components/StructuredOutput.tsx";
+import {
+  parseStreamingStructuredOutput,
+} from "./utils/formatStructuredOutput.ts";
 import { ApprovalCard } from "./components/ApprovalCard.tsx";
 import { HistoryItem } from "./components/HistoryItem.tsx";
 import { InputArea } from "./components/TextInput/InputArea.tsx";
@@ -514,6 +522,24 @@ Use /switch <id> to change, /delete <id> to delete.`,
     return sessionList;
   }, [JSON.stringify(sessionList.map((s) => s.metadata?.thread_id))]);
 
+  // 流式内容的结构化解析：提取已闭合的 JSON，并保留未闭合尾巴
+  const { items: streamingStructuredItems, tail: streamingTail } = useMemo(
+    () => parseStreamingStructuredOutput(currentAIContent || ""),
+    [currentAIContent],
+  );
+
+  // 仅保留每种类型的最新一份（避免同类重复渲染）
+  const uniqueStreamingItems = useMemo(() => {
+    const latest = new Map<string, (typeof streamingStructuredItems)[number]>();
+    streamingStructuredItems.forEach((item) => {
+      latest.set(item.type, item);
+    });
+    const order = ["intent", "project_plan", "todos"];
+    return order
+      .map((t) => latest.get(t))
+      .filter((v): v is (typeof streamingStructuredItems)[number] => Boolean(v));
+  }, [streamingStructuredItems]);
+
   // 🔥 修改 5: 更新 Loading 界面
   // 如果 Session 在加载，或者 Graph 还没初始化完成
   if (isSessionLoading || !isGraphReady) {
@@ -572,7 +598,35 @@ Use /switch <id> to change, /delete <id> to delete.`,
                   />
                 </Box>
               )}
-              {currentAIContent && <MarkdownText content={currentAIContent} />}
+              {/* 流式结构化展示 */}
+              {uniqueStreamingItems.length > 0 &&
+                uniqueStreamingItems.map((item, idx) => {
+                  if (item.type === "intent") {
+                    return <IntentOutput key={`intent-${idx}`} data={item.data} />;
+                  }
+                  if (item.type === "project_plan") {
+                    return (
+                      <ProjectPlanOutput
+                        key={`plan-${idx}`}
+                        data={item.data}
+                      />
+                    );
+                  }
+                  if (item.type === "todos") {
+                    return <TodosOutput key={`todo-${idx}`} data={item.data} />;
+                  }
+                  return null;
+                })}
+              {/* 未闭合的尾巴用提示替代，避免原样输出 JSON 片段 */}
+              {streamingTail && streamingTail.trim().length > 0 && (
+                <Text color="cyan">Processing structured output...</Text>
+              )}
+              {/* 如果没有结构化结果且有普通文本，仍然用 Markdown 显示 */}
+              {uniqueStreamingItems.length === 0 &&
+                currentAIContent &&
+                (!streamingTail || streamingTail.trim().length === 0) && (
+                  <MarkdownText content={currentAIContent} />
+                )}
             </Box>
           </Box>
         )}

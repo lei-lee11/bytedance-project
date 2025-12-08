@@ -4,7 +4,8 @@ import { StatusBadge } from "../App.tsx";
 import { MarkdownText } from "../App.tsx";
 import { THEME } from "../utils/theme.ts";
 import { UIMessage } from "../utils/adapter.ts";
-
+import { tryParseStructuredOutput } from "../utils/formatStructuredOutput.ts";
+import { IntentOutput, ProjectPlanOutput, TodosOutput } from "./StructuredOutput.tsx";
 interface HistoryItemProps {
   item: UIMessage; // 直接使用定义好的接口
 }
@@ -41,6 +42,30 @@ export const HistoryItem: React.FC<HistoryItemProps> = ({ item }) => {
     roleColor = THEME.aiAccent;
   } else if (item.role === "system") {
     roleColor = THEME.system;
+  }
+
+  // 尝试解析结构化输出
+  const structuredData = tryParseStructuredOutput(item.content) || 
+                         (item.reasoning ? tryParseStructuredOutput(item.reasoning) : null);
+
+  // 如果检测到结构化输出，使用专门的展示组件
+  if (structuredData) {
+    return (
+      <Box flexDirection="column" marginBottom={1} gap={1}>
+        {structuredData.map((item: any, idx: number) => {
+          switch (item.type) {
+            case 'intent':
+              return <IntentOutput key={idx} data={item.data} />;
+            case 'project_plan':
+              return <ProjectPlanOutput key={idx} data={item.data} />;
+            case 'todos':
+              return <TodosOutput key={idx} data={item.data} />;
+            default:
+              return null;
+          }
+        })}
+      </Box>
+    );
   }
 
   return (

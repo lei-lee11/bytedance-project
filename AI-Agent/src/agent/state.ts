@@ -12,7 +12,7 @@ export const StateAnnotation = Annotation.Root({
   // 项目根目录（一般在调用 graph 时初始化，比如 process.cwd()）
   projectRoot: Annotation<string>({
     value: (_prev, next) => next, // 每次显式设置时就覆盖
-    default: () => "C:\\projects\\playground", // 🟢 默认根目录（在 TS 里要双反斜杠）
+    default: () => process.cwd(), // 🟢 默认根目录（在 TS 里要双反斜杠）
   }),
 
   // 是否已经注入过项目目录树上下文，避免重复扫描
@@ -112,7 +112,7 @@ export function createAgentState(
   const base: AgentState = {
     messages: [],
     summary: "",
-    projectRoot: overrides.projectRoot ?? "C:\\projects\\playground",
+    projectRoot: overrides.projectRoot ?? process.cwd(),
     projectTreeInjected: false,
     projectTreeText: "",
     projectPlanText: "",
