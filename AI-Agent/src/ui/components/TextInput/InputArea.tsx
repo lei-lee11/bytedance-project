@@ -119,6 +119,40 @@ export const InputArea: FC<InputAreaProps> = ({
     }
 
     // -------------------------------------------------------
+    // 场景 B3: 会话信息查看模式 (/getSessionInfo)
+    // -------------------------------------------------------
+    if (cleanLine.startsWith("/getSessionInfo")) {
+      const param = cleanLine.replace(/^\/getSessionInfo\s*/, "").toLowerCase();
+
+      const sessionItems = sessions.map((s) => ({
+        value: `/getSessionInfo ${s.metadata.thread_id}`,
+        description: s.metadata.title
+          ? `ℹ️ ${s.metadata.title} (${s.metadata.message_count} messages)`
+          : `ℹ️ Untitled (${s.metadata.message_count} messages)`,
+        type: "command",
+      }));
+
+      // 如果没有参数，显示所有会话
+      if (!param) {
+        // 添加一个无需参数的选项来查看当前会话
+        const currentSessionOption = {
+          value: "/getSessionInfo",
+          description: "ℹ️ View current session information",
+          type: "command" as const,
+        };
+        return [currentSessionOption, ...sessionItems];
+      }
+
+      const matches = sessionItems.filter(
+        (item) =>
+          item.value.toLowerCase().includes(param) ||
+          item.description.toLowerCase().includes(param),
+      );
+
+      if (matches.length > 0) return matches;
+    }
+
+    // -------------------------------------------------------
     // 场景 C: 通用指令模式 (/)
     // -------------------------------------------------------
     if (cleanLine.startsWith("/")) {

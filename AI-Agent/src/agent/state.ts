@@ -112,7 +112,7 @@ export function createAgentState(
   const base: AgentState = {
     messages: [],
     summary: "",
-    projectRoot: overrides.projectRoot ?? "C:\\projects\\playground",
+    projectRoot: overrides.projectRoot ?? process.cwd(),
     projectTreeInjected: false,
     projectTreeText: "",
     projectPlanText: "",
