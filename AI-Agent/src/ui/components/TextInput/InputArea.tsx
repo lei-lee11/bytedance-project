@@ -40,7 +40,7 @@ export const InputArea: FC<InputAreaProps> = ({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [cursorTrigger, setCursorTrigger] = useState(0);
   const [isSelectionUpdate, setIsSelectionUpdate] = useState(false);
-  
+
   // 新增：缓存文件搜索结果
   const [fileItems, setFileItems] = useState<FileSystemItem[]>([]);
 
@@ -63,8 +63,8 @@ export const InputArea: FC<InputAreaProps> = ({
       // 使用缓存的文件列表生成建议
       if (fileItems.length > 0) {
         return fileItems.map((item) => ({
-          value: `@${item.path}${item.isDirectory ? '/' : ''}`, // 目录后加斜杠
-          description: item.isDirectory ? '📁 Directory' : '📄 File',
+          value: `@${item.path}${item.isDirectory ? "/" : ""}`, // 目录后加斜杠
+          description: item.isDirectory ? "📁 Directory" : "📄 File",
           type: "file",
           isDirectory: item.isDirectory, // 标记是否为目录
         }));
@@ -185,17 +185,17 @@ export const InputArea: FC<InputAreaProps> = ({
     const lines = query.split("\n");
     const currentLine = lines[lines.length - 1] || "";
     const fileMatch = currentLine.match(/(?:^|\s)@([^\s]*)$/);
-    
+
     if (fileMatch) {
       const searchStr = fileMatch[1];
-      
+
       // 异步搜索文件
       searchFiles(searchStr)
-        .then(items => {
+        .then((items) => {
           setFileItems(items);
         })
-        .catch(error => {
-          console.error('Failed to search files:', error);
+        .catch((error) => {
+          console.error("Failed to search files:", error);
           setFileItems([]);
         });
     } else {
@@ -252,10 +252,10 @@ export const InputArea: FC<InputAreaProps> = ({
         if (lastAtIndex !== -1) {
           // 保留 @ 之前的内容
           const prefix = currentLine.substring(0, lastAtIndex);
-          
+
           // 如果是目录，不加空格，让用户继续浏览
           // 如果是文件，加空格表示补全完成
-          const suffix = selectedItem.isDirectory ? '' : ' ';
+          const suffix = selectedItem.isDirectory ? "" : " ";
           const newLine = prefix + selectedItem.value + suffix;
 
           // 如果有多行，我们需要把最后一行替换掉，保留之前的行

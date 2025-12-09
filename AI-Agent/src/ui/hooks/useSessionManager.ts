@@ -79,8 +79,9 @@ export const useSessionManager = () => {
   );
 
   // 添加消息
-  const addMessage = useCallback(
-    async (
+  const appendLocalMessage = useCallback(
+    (
+      // 注意：这里可以去掉 async，因为它现在是同步操作了
       role: "user" | "ai" | "system" | "tool",
       content: string,
       reasoning?: string,
@@ -88,56 +89,26 @@ export const useSessionManager = () => {
     ) => {
       if (!activeSessionId) return;
 
-      // 1. 乐观更新 UI
-      const optimisticMsg: UIMessage = {
-        id: Date.now().toString(),
+      // 1. 构造 UI 需要的消息对象
+      const uiMsg: UIMessage = {
+        id: Date.now().toString(), // 生成一个临时的唯一 ID
         role,
         content,
         reasoning,
-        // 如果是 tool，可以在这里暂时 mock 状态
+        // 如果是工具调用，保留 UI 需要的元数据
         ...(role === "tool"
           ? { toolName: extraMetadata?.tool_name, isSuccess: true }
           : {}),
       };
 
-      setCurrentHistory((prev) => [...prev, optimisticMsg]);
+      // 2. 🔥 核心：只更新 React 本地状态
+      // 这会触发界面重渲染，让用户立刻看到消息
+      setCurrentHistory((prev) => [...prev, uiMsg]);
 
-      // 2. 写入存储
-      const eventType = toBackendEventType(role);
-      const metadata = {
-        ...(reasoning ? { reasoning } : {}),
-        ...(extraMetadata || {}),
-      };
-
-      try {
-        // 根据事件类型设置正确的显示优先级
-        let displayPriority: 'high' | 'medium' | 'low';
-        switch (eventType) {
-          case 'user_message':
-          case 'ai_response':
-          case 'error':
-            displayPriority = 'high';
-            break;
-          case 'tool_call':
-            displayPriority = 'medium';
-            break;
-          case 'session_created':
-          case 'system_summarize':
-            displayPriority = 'low';
-            break;
-          default:
-            displayPriority = 'medium'; // 默认中等优先级
-        }
-
-        await storage.history.addHistoryRecord(activeSessionId, {
-          event_type: eventType,
-          content: content,
-          display_priority: displayPriority,
-          metadata: metadata,
-        });
-      } catch (e) {
-        console.error("Failed to save message:", e);
-      }
+      // 3. ❌ 已删除：写入 storage 的逻辑
+      // const eventType = toBackendEventType(role);
+      // await storage.history.addHistoryRecord(...);
+      // 这部分现在由你的 Graph Agent 在后台自动完成
     },
     [activeSessionId],
   );
@@ -177,7 +148,7 @@ export const useSessionManager = () => {
     isLoading,
     createNewSession,
     switchSession,
-    addMessage,
+    appendLocalMessage,
     storage,
   };
 };

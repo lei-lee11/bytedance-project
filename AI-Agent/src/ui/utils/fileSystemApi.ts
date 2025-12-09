@@ -40,7 +40,12 @@ export async function listDirectory(
   }
   
   try {
-    const fullPath = path.join(projectRoot, dirPath);
+    // 处理可能包含workspace的情况
+    let processedDirPath = dirPath;
+    if (projectRoot.endsWith('workspace') && dirPath.startsWith('workspace/')) {
+      processedDirPath = dirPath.slice('workspace/'.length);
+    }
+    const fullPath = path.join(projectRoot, processedDirPath);
     const entries = await fs.readdir(fullPath, { withFileTypes: true });
     
     // 过滤掉隐藏文件和常见的忽略目录
@@ -96,7 +101,12 @@ export async function isDirectory(
   projectRoot = process.cwd()
 ): Promise<boolean> {
   try {
-    const fullPath = path.join(projectRoot, filePath);
+    // 处理可能包含workspace的情况
+    let processedFilePath = filePath;
+    if (projectRoot.endsWith('workspace') && filePath.startsWith('workspace/')) {
+      processedFilePath = filePath.slice('workspace/'.length);
+    }
+    const fullPath = path.join(projectRoot, processedFilePath);
     const stats = await fs.stat(fullPath);
     return stats.isDirectory();
   } catch {

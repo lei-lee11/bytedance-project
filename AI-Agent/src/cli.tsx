@@ -5,6 +5,10 @@ import { App } from "./ui/App.js";
 import minimist from "minimist";
 import { cleanupAllProcesses } from "./utils/tools/backgroundProcess.js";
 
+// 设置环境变量PROJECT_ROOT为当前工作目录
+// 这样智能体就会自动将运行命令的目录作为项目根目录
+process.env.PROJECT_ROOT = process.cwd();
+
 // 解析命令行参数
 const args = minimist(process.argv.slice(2));
 

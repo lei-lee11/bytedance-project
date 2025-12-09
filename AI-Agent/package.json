@@ -1,7 +1,10 @@
 {
-  "name": "example-graph",
+  "name": "zj-cli",
   "version": "0.0.1",
   "description": "A starter template for creating a LangGraph workflow.",
+  "bin": {
+    "zj-cli": "bin/cli.js"
+  },
   "packageManager": "yarn@1.22.22",
   "main": "my_app/graph.ts",
   "author": "Your Name",
@@ -75,7 +78,7 @@
     "prettier": "^3.3.3",
     "ts-jest": "^29.1.0",
     "ts-node": "^10.9.2",
-    "tsx": "^4.20.6",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   },
   "directories": {

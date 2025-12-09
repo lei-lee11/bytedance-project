@@ -11,14 +11,14 @@ import {
   reviewNode,
 } from "./nodes.ts";
 import { MemorySaver } from "@langchain/langgraph";
-import { MongoDBSaver } from "@langchain/langgraph-checkpoint-mongodb"
+import { MongoDBSaver } from "@langchain/langgraph-checkpoint-mongodb";
 import { MongoClient } from "mongodb";
 const client = new MongoClient("mongodb://localhost:27017/AI-Agent-Test");
 /**
  * 构建 Graph
  */
 function buildGraph() {
-  console.log("[graph] 构建 Graph");
+  //console.log("[graph] 构建 Graph");
   const workflow = new StateGraph(StateAnnotation)
     // 添加节点，指定可能的出口
     .addNode("initialize", initializeNode, {
@@ -46,7 +46,7 @@ function buildGraph() {
     // 只需要定义入口边
     .addEdge(START, "initialize");
 
-  console.log("[graph] Graph 构建完成");
+  //console.log("[graph] Graph 构建完成");
   return workflow;
 }
 
@@ -65,16 +65,16 @@ export async function initializeGraph(
 
   // 如果已有graph且模式匹配,直接返回
   if (graph && graph._demoMode === demoMode) {
-    console.log(`[graph] 使用已编译的 Graph (演示模式: ${demoMode})`);
+    //.log(`[graph] 使用已编译的 Graph (演示模式: ${demoMode})`);
     return graph;
   }
 
-  console.log(
-    `[graph] 初始化 Graph (演示模式: ${demoMode}, 递归限制: ${recursionLimit})`,
-  );
+  // console.log(
+  //   `[graph] 初始化 Graph (演示模式: ${demoMode}, 递归限制: ${recursionLimit})`,
+  // );
 
   const checkpointer = await initializeCheckpointer();
-  //const checkpointer = new MongoDBSaver({client});
+  //const checkpointer = new MongoDBSaver({ client });
   const workflow = buildGraph();
 
   // 根据模式决定是否启用人工审批
@@ -89,14 +89,14 @@ export async function initializeGraph(
     // console.log("[graph] 启用人工审批机制");
   } else {
     // 演示模式: 跳过人工审批
-    console.log("[graph] 演示模式: 跳过人工审批");
+    //console.log("[graph] 演示模式: 跳过人工审批");
   }
 
   graph = workflow.compile(compileOptions);
   //graph._demoMode = demoMode; // 标记当前模式
   graph._recursionLimit = recursionLimit; // 保存递归限制
 
-  console.log("[graph] Graph 编译完成");
+  // console.log("[graph] Graph 编译完成");
   return graph;
 }
 
