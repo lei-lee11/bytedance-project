@@ -1,13 +1,14 @@
 {
   "extends": "@tsconfig/recommended/tsconfig.json",
   "compilerOptions": {
+      "allowSyntheticDefaultImports": true,
     "allowImportingTsExtensions": true,
     "allowSyntheticDefaultImports": true,
     "noEmit": true,
-    "target": "ES2021",
+    "target": "ESNext",
     "lib": ["ES2021", "ES2022.Object", "DOM"],
     "module": "NodeNext",
-    "moduleResolution": "nodenext",
+    "moduleResolution": "NodeNext",
     "esModuleInterop": true,
     "noImplicitReturns": true,
     "declaration": true,

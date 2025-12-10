@@ -1,7 +1,10 @@
 {
-  "name": "example-graph",
+  "name": "zj-cli",
   "version": "0.0.1",
   "description": "A starter template for creating a LangGraph workflow.",
+  "bin": {
+    "zj-cli": "bin/cli.js"
+  },
   "packageManager": "yarn@1.22.22",
   "main": "my_app/graph.ts",
   "author": "Your Name",
@@ -10,6 +13,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
+    "dev": "tsx watch src/cli.tsx",
     "start:cli": "tsx src/cli.tsx",
     "clean": "rm -rf dist",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --testPathPattern=\\.test\\.ts$ --testPathIgnorePatterns=\\.int\\.test\\.ts$",
@@ -17,26 +21,40 @@
     "format": "prettier --write .",
     "lint": "eslint src",
     "format:check": "prettier --check .",
-    "lint:langgraph-json": "node scripts/checkLanggraphPaths.js",
     "lint:all": "yarn lint & yarn lint:langgraph-json & yarn format:check",
-    "test:all": "yarn test && yarn test:int && yarn lint:langgraph"
+    "test:all": "yarn test && yarn test:int && yarn lint:langgraph",
+    "test:storage": "node scripts/run-storage-tests.js",
+    "test:storage:quick": "tsx tests/storage.test.ts",
+    "test:storage:watch": "tsx --watch tests/storage.test.ts",
+    "lint:langgraph-json": "node scripts/checkLanggraphPaths.js"
   },
   "dependencies": {
+    "@joshua.litt/get-ripgrep": "^0.0.3",
+    "@langchain/community": "^1.0.5",
     "@langchain/core": "^1.0.6",
+    "@langchain/deepseek": "^1.0.2",
     "@langchain/langgraph": "^1.0.2",
     "@langchain/langgraph-checkpoint-mongodb": "^1.0.0",
     "@langchain/langgraph-sdk": "^1.0.0",
     "@langchain/openai": "^1.1.2",
     "ahooks": "^3.9.6",
-    "dotenv": "^17.2.3",
+    "diff": "^8.0.2",
+    "dotenv": "^16.4.5",
+    "glob": "^13.0.0",
     "ink": "^6.5.1",
     "ink-big-text": "^2.0.0",
     "ink-gradient": "^3.0.0",
+    "ink-select-input": "^6.2.0",
     "ink-spinner": "^5.0.0",
+    "ink-text-area": "^0.0.1",
     "ink-text-input": "^6.0.0",
     "langchain": "^1.0.6",
+    "marked": "^15.0.0",
+    "marked-terminal": "^7.3.0",
+    "proper-lockfile": "^4.1.2",
     "react": "^19.2.0",
-    "zod": "^4.1.12"
+    "uuid": "^9.0.0",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.1.0",
@@ -44,8 +62,11 @@
     "@tsconfig/recommended": "^1.0.13",
     "@types/ink": "^0.5.2",
     "@types/jest": "^29.5.0",
+    "@types/marked-terminal": "^6.1.1",
     "@types/minimist": "^1.2.5",
+    "@types/node": "^24.10.1",
     "@types/react": "^19.2.7",
+    "@types/uuid": "^10.0.0",
     "@typescript-eslint/eslint-plugin": "^5.59.8",
     "@typescript-eslint/parser": "^5.59.8",
     "eslint": "^8.41.0",
@@ -57,7 +78,11 @@
     "prettier": "^3.3.3",
     "ts-jest": "^29.1.0",
     "ts-node": "^10.9.2",
-    "tsx": "^4.20.6",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
-  }
+  },
+  "directories": {
+    "test": "tests"
+  },
+  "keywords": []
 }

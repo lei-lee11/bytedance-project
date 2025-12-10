@@ -1,4 +1,4 @@
-import { project_tree } from '../src/utils/tools/project_tree';
+import { project_tree } from '../src/utils/tools/project_tree.js';
 import fs from 'fs/promises';
 import path from 'path';
 
