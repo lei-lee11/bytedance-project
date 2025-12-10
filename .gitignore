@@ -1,3 +1,4 @@
+
 index.cjs
 index.js
 index.d.ts
@@ -17,7 +18,18 @@ dist
 .env
 .ipynb_checkpoints
 
+
 # LangGraph API
 .langgraph_api
 
+.idea/
 
+file_operation.test.ts
+
+CLAUDE.md
+
+test-storage-temp1
+
+storage.test.ts
+
+data
