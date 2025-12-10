@@ -29,7 +29,7 @@ export const TextArea: React.FC<TextAreaProps> = ({
   const [cursorOffset, setCursorOffset] = useState(value.length);
   const [scrollTop, setScrollTop] = useState(0);
 
-  //  核心计算逻辑 
+  //  核心计算逻辑
   const { lines, cursorRow, cursorCol } = useMemo(() => {
     const lines = value.split("\n");
     let runningLength = 0;
@@ -54,21 +54,21 @@ export const TextArea: React.FC<TextAreaProps> = ({
     return { lines, cursorRow: cRow, cursorCol: cCol };
   }, [value, cursorOffset]);
 
-  //  自动滚动 
+  //  自动滚动
   useEffect(() => {
     if (cursorRow < scrollTop) setScrollTop(cursorRow);
     if (cursorRow >= scrollTop + visibleLines)
       setScrollTop(cursorRow - visibleLines + 1);
   }, [cursorRow, scrollTop, visibleLines]);
 
-  //  监听触发器，自动将光标移到末尾 
+  //  监听触发器，自动将光标移到末尾
   useEffect(() => {
     if (cursorToEndTrigger > 0) {
       setCursorOffset(value.length);
     }
-  }, [cursorToEndTrigger, value.length]);
+  }, [cursorToEndTrigger]);
 
-  // 键盘输入处理 
+  // 键盘输入处理
   useInput(
     (input, key) => {
       if (!focus) return;
@@ -78,7 +78,7 @@ export const TextArea: React.FC<TextAreaProps> = ({
       if (onSuggestionNavigate) {
         if (key.upArrow) {
           const handled = onSuggestionNavigate("up");
-          if (handled) return; 
+          if (handled) return;
         }
         if (key.downArrow) {
           const handled = onSuggestionNavigate("down");
@@ -90,9 +90,9 @@ export const TextArea: React.FC<TextAreaProps> = ({
       if (onSuggestionSelect) {
         // Tab 或者 (Enter 且不是 Ctrl+Enter)
         if (key.tab || (key.return && !key.ctrl && !key.meta)) {
-           const handled = onSuggestionSelect();
-           // 如果建议框确实处理了选择（即建议框是打开的），则拦截，不进行后续的换行操作
-           if (handled) return;
+          const handled = onSuggestionSelect();
+          // 如果建议框确实处理了选择（即建议框是打开的），则拦截，不进行后续的换行操作
+          if (handled) return;
         }
       }
 
@@ -167,7 +167,7 @@ export const TextArea: React.FC<TextAreaProps> = ({
       onChange(next);
       setCursorOffset((prev) => prev + textToInsert.length);
     },
-    { isActive: focus }
+    { isActive: focus },
   );
 
   const viewportLines = lines.slice(scrollTop, scrollTop + visibleLines);

@@ -13,7 +13,7 @@ import { InputArea } from "./components/TextInput/InputArea.tsx";
 import { useSessionManager } from "./hooks/useSessionManager.ts";
 import { useMessageProcessor } from "./hooks/useMessageProcessor.ts";
 import { StatusBar } from "./components/StatusBar.tsx";
-
+import { UIMessage } from "./utils/adapter.ts";
 // ... marked 配置保持不变 ...
 marked.setOptions({
   renderer: new TerminalRenderer({
@@ -86,7 +86,7 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
   useEffect(() => {
     const init = async () => {
       try {
-        await initializeGraph(); // 等待图编译并赋值给全局 graph 变量
+        await initializeGraph({ recursionLimit: 100 }); // 等待图编译并赋值给全局 graph 变量
         setIsGraphReady(true);
       } catch (err: any) {
         console.error("Graph initialization failed:", err);
@@ -117,6 +117,7 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
 
       const config = {
         configurable: { thread_id: threadId },
+        recursionLimit: graph._recursionLimit || 100,
         version: "v2" as const,
       };
 
@@ -288,28 +289,80 @@ Use /switch <id> to change.`,
         );
         return;
       }
+      if (input.startsWith("/delete ")) {
+        const targetId = input.replace("/delete ", "").trim();
+        const targetSession = sessionList.find(
+          (s) =>
+            s.metadata?.thread_id === targetId ||
+            s.metadata?.thread_id?.includes(targetId),
+        );
 
-      if (!threadId) return;
+        if (!targetSession) {
+          // await addMessage("system", ...);
+          return;
+        }
+
+        if (!targetSession.metadata?.thread_id) return;
+
+        const fullSessionId = targetSession.metadata.thread_id;
+
+        try {
+          if (fullSessionId === threadId) {
+            const otherSessions = sessionList.filter(
+              (s) => s.metadata?.thread_id !== threadId,
+            );
+
+            if (otherSessions.length > 0) {
+              const nextSession = otherSessions[0];
+              if (!nextSession.metadata?.thread_id) return;
+              await switchSession(nextSession.metadata.thread_id);
+              appendLocalMessage("system", "Deleted and switched...");
+              await storage.sessions.deleteSession(fullSessionId);
+            } else {
+              await createNewSession();
+              appendLocalMessage("system", "Deleted and created new...");
+              await storage.sessions.deleteSession(fullSessionId);
+            }
+          } else {
+            await storage.sessions.deleteSession(fullSessionId);
+            // await addMessage("system", "Deleted...");
+          }
+        } catch (error: any) {
+          console.error("Delete session error:", error);
+          appendLocalMessage("system", `Error: ${error.message}`);
+        }
+        return;
+      }
+
+      // if (input === "/getSessionInfo" || input.startsWith("/getSessionInfo ")) {
+      //   // ... 获取信息逻辑 ...
+      //   // 原本展示信息的 addMessage 调用全部注释
+
+      //   //appendLocalMessage("system", sessionInfoDisplay);
+
+      //   return;
+      // }
+      // if (!threadId) return;
 
       try {
         const processedResult = await processInput(input);
 
-        // 🔥 新增：检查当前会话是否有 todos
-        // 如果有 todos，说明正在执行任务，用户输入新消息时应该创建新会话
-        const config = { configurable: { thread_id: threadId } };
-        const snapshot = await graph.getState(config);
-        const currentTodos = (snapshot.values as any)?.todos || [];
+        // // 🔥 新增：检查当前会话是否有 todos
+        // // 如果有 todos，说明正在执行任务，用户输入新消息时应该创建新会话
+        // const config = { configurable: { thread_id: threadId } };
+        // const snapshot = await graph.getState(config);
+        // const currentTodos = (snapshot.values as any)?.todos || [];
 
-        // 如果当前会话有 todos（正在执行任务），自动创建新会话
-        if (currentTodos.length > 0) {
-          console.log(
-            `[Auto-New-Session] 检测到当前会话有 ${currentTodos.length} 个 todos，自动创建新会话`,
-          );
-          appendLocalMessage("system", "🔄 检测到新任务，自动创建新会话...");
-          await createNewSession();
-          // 等待新会话创建完成
-          await new Promise((resolve) => setTimeout(resolve, 500));
-        }
+        // // 如果当前会话有 todos（正在执行任务），自动创建新会话
+        // if (currentTodos.length > 0) {
+        //   console.log(
+        //     `[Auto-New-Session] 检测到当前会话有 ${currentTodos.length} 个 todos，自动创建新会话`,
+        //   );
+        //   appendLocalMessage("system", "🔄 检测到新任务，自动创建新会话...");
+        //   await createNewSession();
+        //   // 等待新会话创建完成
+        //   await new Promise((resolve) => setTimeout(resolve, 500));
+        // }
 
         appendLocalMessage("user", processedResult.content, undefined, {
           ...processedResult.metadata,
@@ -405,16 +458,29 @@ Use /switch <id> to change.`,
       </Box>
     );
   }
-
+  const seen = new Set<string>();
+  const uniqueHistory: UIMessage[] = history
+    .filter((item) => item.content !== "")
+    .filter((item) => {
+      if (seen.has(item.content)) {
+        return false;
+      }
+      seen.add(item.content);
+      return true;
+    });
   return (
     <Box flexDirection="column" height="100%">
       {showLogo && <Header />}
 
       {/* 消息列表区域 */}
       <Box flexDirection="column" flexGrow={1} paddingX={1}>
-        <Static items={history}>
-          {(item) => <HistoryItem key={item.id} item={item} />}
-        </Static>
+        <Box flexDirection="column">
+          {uniqueHistory.map((item) =>
+            item.content !== "" ? (
+              <HistoryItem key={item.id} item={item} />
+            ) : null,
+          )}
+        </Box>
 
         {(isThinking ||
           currentAIContent ||

@@ -69,10 +69,6 @@ export async function initializeGraph(
     return graph;
   }
 
-  // console.log(
-  //   `[graph] 初始化 Graph (演示模式: ${demoMode}, 递归限制: ${recursionLimit})`,
-  // );
-
   const checkpointer = await initializeCheckpointer();
   //const checkpointer = new MongoDBSaver({ client });
   const workflow = buildGraph();

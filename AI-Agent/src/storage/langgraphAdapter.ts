@@ -823,14 +823,15 @@ export class LangGraphStorageAdapter extends BaseCheckpointSaver {
         status: "active",
       };
       await this.storage.files.writeMetadata(threadId, sessionMetadata);
-    } else {
-      const metadata = sessionInfo.metadata;
-      // 自动激活归档会话
-      if (metadata.status === "archived") {
-        // console.log(`🔄 自动激活归档会话 (putWrites): ${threadId}`);
-        await this.storage.sessions.restoreSession(threadId);
-      }
     }
+    //else {
+    //   const metadata = sessionInfo.metadata;
+    //   // 自动激活归档会话
+    //   if (metadata.status === "archived") {
+    //     // console.log(`🔄 自动激活归档会话 (putWrites): ${threadId}`);
+    //     await this.storage.sessions.restoreSession(threadId);
+    //   }
+    // }
 
     // 直接保存检查点
     // console.log(`💾 直接保存检查点 (putWrites): ${checkpoint.id}`);
