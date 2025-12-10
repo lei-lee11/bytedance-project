@@ -56,7 +56,7 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
   const { exit } = useApp();
   const [showLogo, setShowLogo] = useState(true);
 
-  // 🔥 修改 2: 添加 Graph 初始化状态
+  // 添加 Graph 初始化状态
   const [isGraphReady, setIsGraphReady] = useState(false);
   const [graphError, setGraphError] = useState<string | null>(null);
 
@@ -82,7 +82,7 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
 
   const hasProcessedInitial = useRef(false);
 
-  // 🔥 修改 3: 初始化 Graph 的 Effect
+  // 初始化 Graph 的 Effect
   useEffect(() => {
     const init = async () => {
       try {
@@ -135,9 +135,9 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
 
         let fullContent = "";
         let fullReasoning = "";
-        // ⚡️ 新增：定义上一次更新的时间戳
+        // 定义上一次更新的时间戳
         let lastUpdateTime = 0;
-        // ⚡️ 新增：定义刷新间隔 (例如 100ms，即每秒最多刷新 10 次，足够流畅且不闪)
+        // 定义刷新间隔 (例如 100ms，即每秒最多刷新 10 次，足够流畅且不闪)
         const UPDATE_INTERVAL = 100;
         for await (const event of stream) {
           // ... stream 处理逻辑保持不变 ...
@@ -155,7 +155,7 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
               fullContent += chunk.content;
             }
 
-            // 🔥 核心修改：节流控制
+            // 节流控制
             const now = Date.now();
             if (now - lastUpdateTime > UPDATE_INTERVAL) {
               // 只有间隔超过 100ms 才触发 React 渲染
@@ -194,7 +194,6 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
           });
         }
 
-        // --- 保存 Checkpoint (🔥 修复的部分) ---
         const snapshot = await graph.getState(config);
         // --- 处理中断 (Approval) ---
         if (snapshot.next.length > 0) {
@@ -219,7 +218,6 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
 
   // --- 初始化 Effect ---
   useEffect(() => {
-    // 🔥 修改 4: 增加 !isGraphReady 的判断
     if (
       isSessionLoading ||
       !isGraphReady ||
@@ -298,7 +296,6 @@ Use /switch <id> to change.`,
         );
 
         if (!targetSession) {
-          // await addMessage("system", ...);
           return;
         }
 
@@ -325,7 +322,6 @@ Use /switch <id> to change.`,
             }
           } else {
             await storage.sessions.deleteSession(fullSessionId);
-            // await addMessage("system", "Deleted...");
           }
         } catch (error: any) {
           console.error("Delete session error:", error);
@@ -334,20 +330,10 @@ Use /switch <id> to change.`,
         return;
       }
 
-      // if (input === "/getSessionInfo" || input.startsWith("/getSessionInfo ")) {
-      //   // ... 获取信息逻辑 ...
-      //   // 原本展示信息的 addMessage 调用全部注释
-
-      //   //appendLocalMessage("system", sessionInfoDisplay);
-
-      //   return;
-      // }
-      // if (!threadId) return;
-
       try {
         const processedResult = await processInput(input);
 
-        // // 🔥 新增：检查当前会话是否有 todos
+        // // 检查当前会话是否有 todos
         // // 如果有 todos，说明正在执行任务，用户输入新消息时应该创建新会话
         // const config = { configurable: { thread_id: threadId } };
         // const snapshot = await graph.getState(config);

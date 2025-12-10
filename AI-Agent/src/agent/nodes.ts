@@ -401,7 +401,7 @@ export async function executorNode(state: AgentState) {
     summary,
   } = state;
 
-  // 🔥🔥🔥 [开始] 自动摘要逻辑 (优化版) 🔥🔥🔥
+  //  自动摘要逻辑
   if (messages.length > 40) {
     // 1. 智能确定切分点
     // 增加保留数量到 10，确保有足够的近期上下文
@@ -475,7 +475,6 @@ ${summary || "（无）"}
       });
     }
   }
-  // 🔥🔥🔥 [结束] 自动摘要逻辑 🔥🔥🔥
 
   // 循环保护 - 更严格的检测
   if (iterationCount >= maxIterations) {
@@ -605,20 +604,17 @@ ${summary || "（无）"}
         (m as any)._getType?.() === "ai" &&
         !((m as any).tool_calls?.length > 0),
     )
-    .slice(-3); // 取最后 3 条
+    .slice(-3);
 
   if (recentAIMessages.length >= 3) {
-    // 提取内容摘要进行对比
     const messageContents = recentAIMessages.map((m) => {
       const content = String((m as any).content || "");
       return content.substring(0, 200).trim().toLowerCase();
     });
 
-    // 判断是否高度相似
     const allSimilar = messageContents.every((content, i) => {
       if (i === 0) return true;
       const prev = messageContents[i - 1];
-      // 只要完全相同，或者互相包含前100个字符，就视为重复
       const similarity =
         content === prev ||
         content.includes(prev.substring(0, 100)) ||
@@ -626,27 +622,16 @@ ${summary || "（无）"}
       return similarity;
     });
 
-    // 🚨 触发条件：内容相似 且 长度不是太短（防止"好的"这种短语误判）
     if (allSimilar && messageContents[0].length > 10) {
-      // 🔥🔥 [关键修复] 构建删除操作 🔥🔥
-      // 把这几条导致死循环的 AI 消息删掉，防止下一轮迭代再次检测到它们
-      const idsToDelete = recentAIMessages
-        .map((m) => m.id)
-        .filter((id) => id !== undefined && id !== null)
-        .map((id) => new RemoveMessage({ id: id! }));
-
       const nextIndex = currentTodoIndex + 1;
       const allDone = nextIndex >= todos.length;
-
-      // 准备要插入的系统提示
-      const warningMsg = new SystemMessage(
-        `⚠️ 检测到重复回复循环 (已自动清理历史并跳过当前任务)`,
-      );
 
       if (allDone) {
         return new Command({
           update: {
-            messages: [warningMsg, ...idsToDelete], // 插入警告 + 执行删除
+            messages: [
+              new SystemMessage(`⚠️ 检测到重复回复循环,已强制完成所有任务`),
+            ],
             currentTodoIndex: nextIndex,
             taskCompleted: true,
             taskStatus: "completed" as const,
@@ -658,12 +643,12 @@ ${summary || "（无）"}
 
       return new Command({
         update: {
-          messages: [warningMsg, ...idsToDelete], // 插入警告 + 执行删除
+          messages: [new SystemMessage(`⚠️ 检测到重复回复循环,跳过到下一任务`)],
           currentTodoIndex: nextIndex,
           taskCompleted: true,
           iterationCount: 0,
         },
-        goto: "executor", // 重载节点，此时历史已经干净了
+        goto: "executor",
       });
     }
   }
