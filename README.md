@@ -36,6 +36,14 @@ _上图展示了 Agent 切换对话的完整过程。_
 
 项目解决了传统 AI 编程工具无法处理复杂多步骤任务的痛点，通过 **DAG（有向无环图）** 架构管理状态，实现了从“需求分析”到“代码交付”的自动化闭环。
 
+### � 详细文档
+
+想了解详细的技术细节和开发指南？请查看我们的完整开发文档：
+
+[AI-Agent CLI 详细开发文档](https://scnn4daffjaw.feishu.cn/wiki/UsAmwfh2PitkrYkjZMOc1Jn8nye?from=from_copylink)
+
+---
+
 ### 核心能力
 
 - 🧠 **双阶段规划 (Two-Stage Planning)**: 自动将模糊需求拆解为 `Project Plan` 和具体的 `Todo List`。
@@ -118,7 +126,7 @@ review   直接执行
 
 ---
 
-## 🚀 快速开始
+## �🚀 快速开始
 
 ### 1. 环境要求
 
