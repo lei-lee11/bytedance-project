@@ -21,14 +21,14 @@ const tools = [
 ];
 
 export const SENSITIVE_TOOLS = [
-  // "manualTestRunnerTool",
-  // "autoTestRunnerTool",
-  // "append_to_file",
-  // "write_file",
-  // "start_background_process",
-  // "stop_background_process",
-  // "edit_code_snippet",
-  // "restore_from_backup",
-  "",
+  "manualTestRunnerTool",
+  "autoTestRunnerTool",
+  "append_to_file",
+  "write_file",
+  "start_background_process",
+  "stop_background_process",
+  "edit_code_snippet",
+  "restore_from_backup",
+  //"",
 ];
 export { tools };

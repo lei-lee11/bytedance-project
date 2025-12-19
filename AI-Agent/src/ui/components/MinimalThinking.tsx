@@ -21,7 +21,7 @@ export const MinimalThinking: FC<{
   // 清理 Markdown 标记 (放在截断之前，保证内容的有效性)
   displayText = displayText.replace(/^[#\-*]+\s*/, "");
 
-  // 3. 🔥 核心修改：截断长文本
+  // 截断长文本
   // 如果文本超过 70 字符：
   // 旧逻辑: slice(0, 67) -> 显示开头，导致长句看起来不动
   // 新逻辑: slice(-67)   -> 显示【末尾】，让用户看到最新的动态

@@ -212,7 +212,6 @@ export async function plannerNode(state: AgentState) {
   // 获取最后一条消息
   const lastMessage = state.messages[state.messages.length - 1];
 
-  // 🛡️ [去重保护]
   const isLastMessagePlanConfirmation =
     lastMessage?.content &&
     String(lastMessage.content).includes("生成了") &&
@@ -367,7 +366,7 @@ export async function plannerNode(state: AgentState) {
       techStackSummary,
       projectInitSteps,
 
-      // ✨ [关键] 更新全局 State 中的 projectRoot
+      //  更新全局 State 中的 projectRoot
       // 这样 executorNode 和后续的 tools 都会知道要在新目录下工作
       projectRoot: finalProjectRoot,
 
@@ -487,7 +486,6 @@ ${summary || "（无）"}
       goto: END,
     });
   }
-  // (已删除重复的循环保护代码块)
 
   // 检查是否所有任务完成
   if (todos.length > 0 && currentTodoIndex >= todos.length) {
