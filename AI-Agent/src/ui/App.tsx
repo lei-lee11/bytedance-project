@@ -79,7 +79,6 @@ export const App: FC<{ initialMessage?: string }> = ({ initialMessage }) => {
   const [currentTool, setCurrentTool] = useState<ToolState | null>(null);
   const [pendingTool, setPendingTool] = useState<PendingToolState | null>(null);
   const [awaitingApproval, setAwaitingApproval] = useState(false);
-
   const hasProcessedInitial = useRef(false);
 
   // 初始化 Graph 的 Effect
@@ -414,7 +413,7 @@ Use /switch <id> to change.`,
     return sessionList;
   }, [JSON.stringify(sessionList.map((s) => s.metadata?.thread_id))]);
 
-  // 🔥 修改 5: 更新 Loading 界面
+  //  更新 Loading 界面
   // 如果 Session 在加载，或者 Graph 还没初始化完成
   if (isSessionLoading || !isGraphReady) {
     return (

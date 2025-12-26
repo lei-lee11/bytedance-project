@@ -15,10 +15,55 @@ import { attachFilesToContext } from "../utils/tools/fileContext.js";
 import {
   buildIntentClassificationPrompt,
   buildChatAgentPrompt,
+  buildSummaryPrompt,
+  buildProjectPlanSystemPrompt,
+  buildTaskPlanSystemPrompt,
+  buildExecutorProjectPlanContext,
+  buildExecutorProjectTreeContext,
+  buildExecutorTaskContext,
+  buildExecutorSummaryContext,
+  buildProjectPlanUserMessage,
+  buildTaskPlanUserMessage,
+  buildLoopErrorMessage,
+  CHAT_ERROR_MESSAGE,
+  buildPlanCompleteMessage,
+  TASK_COMPLETE_MESSAGE,
+  DUPLICATE_LOOP_ALL_DONE_MESSAGE,
+  DUPLICATE_LOOP_SKIP_MESSAGE,
+  CONSTANTS,
+  isAskingForHelp,
+  hasCompletionToken,
 } from "../agent/prompt.js";
+import {
+  advanceToNextTodo,
+  skipToNextTodo,
+  skipToNextTodoWithResponse,
+  continueExecution,
+  routeToTools,
+  routeToReview,
+  completeAllTasks,
+  isMaxIterationsReached,
+  areAllTasksComplete,
+  findLastUserMessage,
+  findFileContextMessage,
+  getRecentAIMessages,
+  getRecentToolMessages,
+  getMessagesWithToolCalls,
+  isAIMessage,
+  isToolMessage,
+  hasToolCalls,
+  detectDuplicateAIContent,
+  detectDuplicateToolCalls,
+  detectDuplicatePlainAIResponses,
+  calculateSummaryCutIndex,
+  createRemoveOperations,
+  truncateProjectTree,
+  safeToString,
+} from "./node-helpers.js";
 import { z } from "zod";
 
-// Schema 定义
+// ----Schema 定义-------
+
 const ProjectPlanSchema = z.object({
   projectPlanText: z.string(),
   techStackSummary: z.string().nullable().default(""),
@@ -38,7 +83,6 @@ const TaskPlanSchema = z.object({
   todos: z.array(z.string()),
 });
 
-// 意图分类 Schema
 const IntentSchema = z.object({
   intent: z
     .enum(["task", "chat"])
@@ -46,6 +90,7 @@ const IntentSchema = z.object({
   confidence: z.number().min(0).max(1).describe("分类置信度，0-1之间"),
   reasoning: z.string().describe("分类理由"),
 });
+
 /**
  * 意图分类节点
  * 判断用户输入是编程任务还是闲聊
@@ -101,40 +146,21 @@ export async function intentClassifierNode(state: AgentState) {
  * 处理非编程任务的对话
  */
 export async function chatNode(state: AgentState) {
-  //console.log("[chat] 生成闲聊回复");
-
   try {
-    // 使用完整的对话历史来生成回复
     const chatPrompt = buildChatAgentPrompt();
     const response = await baseModel.invoke([
       new SystemMessage(chatPrompt),
-      ...state.messages, // 传递完整的对话历史
+      ...state.messages,
     ]);
 
-    // console.log(
-    //   `[chat] 回复: ${response.content.toString().substring(0, 100)}...`,
-    // );
-
-    // 返回回复并结束
     return new Command({
-      update: {
-        messages: [response],
-      },
+      update: { messages: [response] },
       goto: END,
     });
   } catch (error) {
-    // console.error("[chat] 生成回复失败:", error);
-
-    // 返回错误消息
-    const errorMessage = new AIMessage({
-      content:
-        "抱歉，我现在遇到了一些问题。请稍后再试，或者直接告诉我你想要实现的编程任务！",
-    });
-
+    const errorMessage = new AIMessage({ content: CHAT_ERROR_MESSAGE });
     return new Command({
-      update: {
-        messages: [errorMessage],
-      },
+      update: { messages: [errorMessage] },
       goto: END,
     });
   }
@@ -142,7 +168,7 @@ export async function chatNode(state: AgentState) {
 
 /**
  * 初始化节点
- * 合并了 processReferencedFiles 和 injectProjectTreeNode
+ * 处理引用的文件和项目树扫描
  */
 export async function initializeNode(state: AgentState) {
   //console.log("[initialize] 开始初始化");
@@ -202,14 +228,9 @@ export async function initializeNode(state: AgentState) {
 
 /**
  * 规划节点
- * 合并了 projectPlannerNode 和 taskPlannerNode
+ * 生成项目规划和todos任务列表
  */
-// src/agent/nodes.ts
-
 export async function plannerNode(state: AgentState) {
-  // console.log("[planner] 开始规划");
-
-  // 获取最后一条消息
   const lastMessage = state.messages[state.messages.length - 1];
 
   const isLastMessagePlanConfirmation =
@@ -218,66 +239,31 @@ export async function plannerNode(state: AgentState) {
     String(lastMessage.content).includes("个任务");
 
   if (isLastMessagePlanConfirmation) {
-    return new Command({
-      goto: "executor",
-    });
+    return new Command({ goto: "executor" });
   }
 
-  // 初始根目录（默认为当前目录）
   const currentProjectRoot = state.projectRoot || ".";
-
-  // 查找最近的用户输入
-  const lastUserMsg = state.messages
-    .slice()
-    .reverse()
-    .find((m) => m._getType() === "human");
-
+  const lastUserMsg = findLastUserMessage(state.messages);
   const userRequest = lastUserMsg ? lastUserMsg.content : "";
 
   // 1. 项目规划
-  const projectPlanSystem = new SystemMessage({
-    content: [
-      "你是架构规划助手，只负责决定技术栈和项目结构。",
-      "输出结构化结果：projectPlanText, techStackSummary, projectInitSteps, targetDirectory。",
-      "projectInitSteps 必须是可以直接执行的工程级初始化步骤。",
-      "",
-      " **关于目标目录**:",
-      "如果用户需求或提供的文档中明确指定了项目应该在某个特定的文件夹下创建（例如 '在 my-app 文件夹中初始化' 或 'Root: /src/project'），请务必将该路径填入 targetDirectory 字段。",
-      "如果未指定，targetDirectory 留空。",
-      "",
-      "⚠️ **重要约束**:",
-      "1. 步骤只能是动作描述，例如：'创建文件 xxx.js'。",
-      "2. 绝对禁止包含具体代码实现。",
-    ].join("\n"),
-  });
-  const fileContextMsg = state.messages.find(
-    (m) =>
-      m._getType() === "system" &&
-      String(m.content).includes("Referenced Files Context"),
-  );
-
+  const fileContextMsg = findFileContextMessage(state.messages);
   const fileContextContent = fileContextMsg
     ? String(fileContextMsg.content)
     : "";
 
-  const projectPlanUser = new HumanMessage({
-    content: [
-      `当前运行目录：\`${currentProjectRoot}\``,
-      "",
-      "===== 上下文文件内容 =====",
-      fileContextContent || "(无已加载文件，请根据需求自行判断)",
-      "==========================",
-      "",
-      "用户需求：",
-      String(userRequest),
-    ].join("\n"),
-  });
-
-  const structuredModel = baseModel.withStructuredOutput(ProjectPlanSchema);
-  const projectPlan = await structuredModel.invoke([
-    projectPlanSystem,
-    projectPlanUser,
-  ]);
+  const projectPlan = await baseModel
+    .withStructuredOutput(ProjectPlanSchema)
+    .invoke([
+      new SystemMessage({ content: buildProjectPlanSystemPrompt() }),
+      new HumanMessage({
+        content: buildProjectPlanUserMessage(
+          currentProjectRoot,
+          fileContextContent,
+          String(userRequest),
+        ),
+      }),
+    ]);
 
   const projectPlanText = String(projectPlan.projectPlanText || "");
   const techStackSummary = String(projectPlan.techStackSummary || "");
@@ -285,97 +271,48 @@ export async function plannerNode(state: AgentState) {
     ? projectPlan.projectInitSteps
     : [];
 
-  // ✨ [处理目标目录逻辑]
+  // 处理目标目录逻辑
   const targetDir = projectPlan.targetDirectory;
   let mkdirTask: string | null = null;
   let finalProjectRoot = currentProjectRoot;
 
-  // 如果 AI 识别出了新的目标目录，且不是当前目录
   if (targetDir && targetDir !== "." && targetDir !== "./") {
-    // console.log(`[planner] 识别到新的目标根目录: ${targetDir}`);
-
-    // 1. 更新后续任务使用的根目录
-    // 注意：如果 targetDir 是相对路径，这里逻辑上是相对于当前运行目录的
     finalProjectRoot = targetDir;
-
-    // 2. 创建一个显式的任务来建立这个文件夹
     mkdirTask = `创建并初始化项目根目录: ${targetDir}`;
   }
 
-  // 2. 任务拆解
-  const taskPlanSystem = new SystemMessage({
-    content: [
-      "你是技术执行官 (CTO)。你已经完成了所有的需求分析和架构设计（已在上下文中）。",
-      "现在的目标是：**指挥初级工程师（Executor）真正把代码写出来**。",
-      "",
-      "请生成一份 `todos` 列表，必须严格遵守以下规则：",
-      "",
-      "1. 🚫 **严禁认知类任务**：不要包含 '分析需求'、'设计数据库'、'阅读文档'、'制定计划' 等任务。这些已经做完了。",
-      "2. ✅ **必须是物理操作**：每个任务都必须明确指示去**操作文件系统**或**运行命令**。",
-      "   - 好的例子：'初始化 server 目录并安装 express 依赖'",
-      "   - 好的例子：'创建 models/User.js 和 models/Post.js 文件'",
-      "3. 📦 **合理的任务聚合**：",
-      "   - 不要把每个文件的创建都拆成一个单独任务。",
-      "   - 将相关的操作合并。例如：'完成所有后端路由和控制器的编写' 作为一个任务。",
-      "   - 整个项目通常拆分为 4-8 个核心实施步骤。",
-      "4. 🔗 **严格的执行顺序**：",
-      "   - 必须先创建目录和安装依赖（环境搭建）。",
-      "   - 然后是核心配置（数据库连接）。",
-      "   - 然后是后端逻辑。",
-      "   - 最后是前端开发。",
-      "",
-      `注意：当前确定的项目根目录为 "${finalProjectRoot}"。所有文件操作都应基于此目录。`,
-    ].join("\n"),
-  });
-
-  const taskPlanUser = new HumanMessage({
-    content: [
-      "===== 项目规划 =====",
-      projectPlanText,
-      `目标根目录: ${finalProjectRoot}`,
-      "===== 上下文文件内容 =====",
-      fileContextContent, // 显式告知 Task Planner
-      "===== 初始化步骤 =====",
-      projectInitSteps.map((s, i) => `${i + 1}. ${s}`).join("\n"),
-      "===== 用户需求 =====",
-      String(userRequest),
-    ].join("\n"),
-  });
-
-  const taskModel = baseModel.withStructuredOutput(TaskPlanSchema);
-  const taskPlan = await taskModel.invoke([taskPlanSystem, taskPlanUser]);
+  // 2. 任务拆解,生成todos列表
+  const taskPlan = await baseModel.withStructuredOutput(TaskPlanSchema).invoke([
+    new SystemMessage({ content: buildTaskPlanSystemPrompt(finalProjectRoot) }),
+    new HumanMessage({
+      content: buildTaskPlanUserMessage(
+        projectPlanText,
+        finalProjectRoot,
+        fileContextContent,
+        projectInitSteps,
+        String(userRequest),
+      ),
+    }),
+  ]);
 
   let todos = Array.isArray(taskPlan.todos) ? taskPlan.todos : [];
 
-  // ✨ [插入创建目录任务]
-  // 如果我们需要切换目录，确保第一个任务是创建该目录
   if (mkdirTask) {
     todos = [mkdirTask, ...todos];
   }
 
-  // console.log(`[planner] 新规划生成完毕: ${todos.length} 个任务 (Root: ${finalProjectRoot})`);
-
   return new Command({
     update: {
       messages: [
-        new SystemMessage({
-          content: `规划完成。已生成 ${todos.length} 个具体的开发任务，开始执行。`,
-        }),
+        new SystemMessage({ content: buildPlanCompleteMessage(todos.length) }),
       ],
       projectPlanText,
       techStackSummary,
       projectInitSteps,
-
-      //  更新全局 State 中的 projectRoot
-      // 这样 executorNode 和后续的 tools 都会知道要在新目录下工作
       projectRoot: finalProjectRoot,
-
-      // 🔥 强制覆盖旧任务
       todos,
-      // 🔥 强制重置进度
       currentTodoIndex: 0,
       taskStatus: "executing" as const,
-      // 🔥 重置循环计数器，给新任务一个干净的开始
       iterationCount: 0,
     },
     goto: "executor",
@@ -387,84 +324,45 @@ export async function plannerNode(state: AgentState) {
  * 核心的 agent 逻辑，使用 Command 进行路由
  */
 export async function executorNode(state: AgentState) {
-  // console.log("[executor] 开始执行");
-
   const {
     messages,
     todos = [],
     currentTodoIndex = 0,
     iterationCount = 0,
-    maxIterations = 50,
+    maxIterations = CONSTANTS.MAX_ITERATIONS,
     projectTreeText,
     projectPlanText,
     summary,
   } = state;
 
-  //  自动摘要逻辑
-  if (messages.length > 40) {
-    // 1. 智能确定切分点
-    // 增加保留数量到 10，确保有足够的近期上下文
-    const keepCount = 10;
-    let cutIndex = messages.length - keepCount;
+  // 自动摘要逻辑
+  if (messages.length > CONSTANTS.SUMMARY_MESSAGE_THRESHOLD) {
+    //动态计算摘要保留消息数量,确保不会切在 ToolMessage 上
+    const cutIndex = calculateSummaryCutIndex(
+      messages,
+      CONSTANTS.SUMMARY_KEEP_COUNT,
+    );
 
-    // 🛡️ 安全回溯：确保切分点不落在 ToolMessage 上
-    // 如果切分点是 ToolMessage，说明它的前一条通常是 AI 的 Tool Call，必须一起保留
-    while (
-      cutIndex > 0 &&
-      (messages[cutIndex]._getType() === "tool" ||
-        messages[cutIndex].constructor.name === "ToolMessage")
-    ) {
-      cutIndex--;
-    }
-
-    // 确保有内容可摘要
     if (cutIndex > 0) {
       const messagesToSummarize = messages.slice(0, cutIndex);
+      const summaryPrompt = buildSummaryPrompt(
+        summary || "",
+        messagesToSummarize,
+      );
 
-      // 2. 构造摘要 Prompt
-      const summaryPrompt = `
-你是一个专业的代码项目管理员。
-这是之前的对话摘要：
-${summary || "（无）"}
-
-以下是即将归档的旧对话历史：
----------------------
-（包含 ${messagesToSummarize.length} 条交互记录）
----------------------
-
-请结合旧摘要和这段旧对话，生成一个新的、精简的【技术摘要】。
-摘要要求：
-1. 记录已完成的关键任务和修改的文件。
-2. 记录重要的上下文信息（如变量名、路径约定）。
-3. 记录当前遗留的问题或下一步的计划。
-4. 忽略琐碎的闲聊。
-
-请直接输出摘要内容，不要包含任何前缀或客套话。
-`;
-
-      // 3. 调用模型生成摘要
-      // 建议：如果可能，这里最好使用不带工具绑定的纯模型实例，以防模型尝试调用工具
       const summaryResponse = await modelWithTools.invoke(
         [
           new SystemMessage(summaryPrompt),
           ...messagesToSummarize,
           new HumanMessage("请生成新的技术摘要。"),
         ],
-        {
-          callbacks: [],
-        },
+        { callbacks: [] },
       );
 
       const newSummary = String(summaryResponse.content);
+      // 构建删除操作,删除旧消息
+      const deleteOperations = createRemoveOperations(messagesToSummarize);
 
-      // 4. 构建删除操作
-      const deleteOperations = messagesToSummarize
-        // 1. 先过滤：确保只处理有 id 的消息
-        .filter((m) => m.id !== undefined && m.id !== null)
-        // 2. 再映射：传入对象形式 { id: ... }，并使用 ! 断言 id 必定存在
-        .map((m) => new RemoveMessage({ id: m.id! }));
-
-      // 5. 更新状态并立即重载
       return new Command({
         update: {
           summary: newSummary,
@@ -475,9 +373,8 @@ ${summary || "（无）"}
     }
   }
 
-  // 循环保护 - 更严格的检测
-  if (iterationCount >= maxIterations) {
-    // console.error(`[executor] 达到最大迭代次数 ${maxIterations}，强制结束`);
+  // 循环保护 - 检测最大迭代次数
+  if (isMaxIterationsReached(iterationCount, maxIterations)) {
     return new Command({
       update: {
         error: `达到最大迭代次数 ${maxIterations}`,
@@ -488,420 +385,155 @@ ${summary || "（无）"}
   }
 
   // 检查是否所有任务完成
-  if (todos.length > 0 && currentTodoIndex >= todos.length) {
-    // console.log("[executor] 所有任务已完成");
+  if (areAllTasksComplete(currentTodoIndex, todos.length)) {
     return new Command({
       update: {
         taskStatus: "completed" as const,
-        messages: [new SystemMessage({ content: "所有任务已完成！" })],
+        messages: [new SystemMessage({ content: TASK_COMPLETE_MESSAGE })],
       },
       goto: END,
     });
   }
 
-  // 检测重复消息 - 防止循环
-  const lastMessages = messages.slice(-5);
-  const lastAIMessages = lastMessages.filter(
-    (m) =>
-      m &&
-      (m.constructor.name === "AIMessage" || (m as any)._getType?.() === "ai"),
-  );
+  // 检测重复的 AI 消息内容
+  if (detectDuplicateAIContent(messages) && todos.length > 0) {
+    const nextIndex = currentTodoIndex + 1;
+    const allDone = nextIndex >= todos.length;
+    return advanceToNextTodo(nextIndex, allDone);
+  }
 
-  // 检查最近的AI消息是否重复
-  if (lastAIMessages.length >= 2) {
-    const lastContent = String(
-      lastAIMessages[lastAIMessages.length - 1]?.content || "",
-    );
-    const prevContent = String(
-      lastAIMessages[lastAIMessages.length - 2]?.content || "",
-    );
-
+  // 检测重复的工具调用
+  const loopDetection = detectDuplicateToolCalls(messages);
+  if (loopDetection.hasLoop && loopDetection.toolName) {
     if (
-      lastContent.substring(0, 50) === prevContent.substring(0, 50) &&
-      lastContent.length > 10
+      loopDetection.toolName === "write_file" ||
+      loopDetection.toolName === "create_file"
     ) {
-      if (todos.length > 0) {
-        const nextIndex = currentTodoIndex + 1;
-        if (nextIndex >= todos.length) {
-          return new Command({
-            update: {
-              taskStatus: "completed" as const,
-              iterationCount: 0,
-            },
-            goto: END,
-          });
-        }
-
-        return new Command({
-          update: {
-            currentTodoIndex: nextIndex,
-            iterationCount: 0,
-          },
-          goto: "executor",
-        });
-      }
-    }
-  }
-
-  // 检测重复的工具调用 - 防止循环
-  const recentMessages = messages.slice(-15);
-  const toolCallMessages = recentMessages.filter(
-    (m) => m && (m as any).tool_calls?.length > 0,
-  );
-
-  if (toolCallMessages.length >= 4) {
-    const recentToolCalls = toolCallMessages.slice(-4).map((m) => {
-      const calls = (m as any).tool_calls || [];
-      return calls.map((tc: any) => tc.name).join(",");
-    });
-
-    const uniqueCalls = new Set(recentToolCalls);
-    if (uniqueCalls.size === 1 && recentToolCalls[0]) {
-      const repeatedTool = recentToolCalls[0];
-
-      if (repeatedTool === "write_file" || repeatedTool === "create_file") {
-        console.log(
-          `[executor] 检测到连续写文件操作 (${repeatedTool})，这是正常的生成过程，跳过循环检测。`,
-        );
-      } else {
-        console.error(
-          `[executor] ⚠️ 检测到循环: ${repeatedTool} 被连续调用 ${recentToolCalls.length} 次`,
-        );
-
-        return new Command({
-          update: {
-            error: `检测到循环调用工具: ${repeatedTool}`,
-            messages: [
-              new SystemMessage({
-                content: [
-                  `⚠️ 检测到循环,已自动停止执行。`,
-                  ``,
-                  `工具 "${repeatedTool}" 被连续调用 ${recentToolCalls.length} 次。`,
-                  ``,
-                  `可能原因:`,
-                  `1. projectRoot 配置错误`,
-                  `2. 文件路径不存在`,
-                  `3. 权限问题`,
-                  `4. AI 陷入思维循环`,
-                ].join("\n"),
-              }),
-            ],
-            taskStatus: "completed" as const,
-          },
-          goto: END,
-        });
-      }
-    }
-  }
-
-  // 检测重复的 AI 回复内容 - 防止无工具调用的循环
-  const recentAIMessages = recentMessages
-    .filter(
-      (m) =>
-        m &&
-        (m as any)._getType?.() === "ai" &&
-        !((m as any).tool_calls?.length > 0),
-    )
-    .slice(-3);
-
-  if (recentAIMessages.length >= 3) {
-    const messageContents = recentAIMessages.map((m) => {
-      const content = String((m as any).content || "");
-      return content.substring(0, 200).trim().toLowerCase();
-    });
-
-    const allSimilar = messageContents.every((content, i) => {
-      if (i === 0) return true;
-      const prev = messageContents[i - 1];
-      const similarity =
-        content === prev ||
-        content.includes(prev.substring(0, 100)) ||
-        prev.includes(content.substring(0, 100));
-      return similarity;
-    });
-
-    if (allSimilar && messageContents[0].length > 10) {
-      const nextIndex = currentTodoIndex + 1;
-      const allDone = nextIndex >= todos.length;
-
-      if (allDone) {
-        return new Command({
-          update: {
-            messages: [
-              new SystemMessage(`⚠️ 检测到重复回复循环,已强制完成所有任务`),
-            ],
-            currentTodoIndex: nextIndex,
-            taskCompleted: true,
-            taskStatus: "completed" as const,
-            iterationCount: 0,
-          },
-          goto: END,
-        });
-      }
-
+      console.log(`[executor] 检测到连续写文件操作，跳过循环检测。`);
+    } else {
+      console.error(`[executor] ⚠️ 检测到循环: ${loopDetection.toolName}`);
       return new Command({
         update: {
-          messages: [new SystemMessage(`⚠️ 检测到重复回复循环,跳过到下一任务`)],
-          currentTodoIndex: nextIndex,
-          taskCompleted: true,
-          iterationCount: 0,
+          error: `检测到循环调用工具: ${loopDetection.toolName}`,
+          messages: [
+            new SystemMessage({
+              content: buildLoopErrorMessage(
+                loopDetection.toolName,
+                loopDetection.count!,
+              ),
+            }),
+          ],
+          taskStatus: "completed" as const,
         },
-        goto: "executor",
+        goto: END,
       });
     }
+  }
+
+  // 检测重复的 AI 回复内容（无工具调用）
+  if (detectDuplicatePlainAIResponses(messages)) {
+    const nextIndex = currentTodoIndex + 1;
+    const allDone = nextIndex >= todos.length;
+    return skipToNextTodo(
+      nextIndex,
+      allDone,
+      allDone ? DUPLICATE_LOOP_ALL_DONE_MESSAGE : DUPLICATE_LOOP_SKIP_MESSAGE,
+    );
   }
 
   // 构建上下文消息
   const contextMessages: SystemMessage[] = [];
-  if (projectPlanText && projectPlanText.trim()) {
+
+  if (projectPlanText?.trim()) {
     contextMessages.push(
       new SystemMessage({
-        content: `## 核心项目规划与技术规范
-
-${projectPlanText}
-
-请严格遵循上述规范进行开发。`,
+        content: buildExecutorProjectPlanContext(projectPlanText),
       }),
     );
   }
 
-  if (projectTreeText && projectTreeText.trim()) {
-    const maxTreeLength = 5000;
-    const truncatedTree =
-      projectTreeText.length > maxTreeLength
-        ? projectTreeText.substring(0, maxTreeLength) + "\n...（已截断）"
-        : projectTreeText;
-
+  if (projectTreeText?.trim()) {
     contextMessages.push(
       new SystemMessage({
-        content: `## 项目结构
-
-${truncatedTree}
-`,
+        content: buildExecutorProjectTreeContext(projectTreeText),
       }),
     );
   }
 
-  // 添加当前任务信息
   if (todos.length > 0 && currentTodoIndex < todos.length) {
     const currentTask = todos[currentTodoIndex];
-    const taskNumber = currentTodoIndex + 1;
-    const totalTasks = todos.length;
-
     contextMessages.push(
       new SystemMessage({
-        content: [
-          `你是一个高效的开发助手，专注于完成任务。`,
-          `==========================`,
-          `📋 当前任务 (${taskNumber}/${totalTasks}):`,
-          `「${currentTask}」`,
-          `==========================`,
-          ``,
-          `**执行规则**:`,
-          `1. 直接执行任务，使用必要的工具（如 write_file, read_file 等）`,
-          `2. 完成后必须明确说"✅ 任务完成"`,
-          `3. 不要询问用户是否需要帮助`,
-          `4. 一次性完成整个任务，不要分步骤`,
-          `5. 如果任务需要创建文件，必须调用 write_file 工具`,
-          ``,
-          `**禁止的回复**:`,
-          `❌ "如果你需要进一步的帮助..."`,
-          `❌ "还有什么我可以帮你的吗？"`,
-          `❌ 不调用工具就说任务完成`,
-          ``,
-          `**正确的回复**:`,
-          `✅ 先调用工具完成实际操作`,
-          `✅ 然后说"✅ 任务完成。已创建XXX文件..."`,
-          ``,
-          `现在开始执行任务！必须调用工具来完成任务！`,
-        ].join("\n"),
+        content: buildExecutorTaskContext(
+          currentTask,
+          currentTodoIndex + 1,
+          todos.length,
+        ),
       }),
     );
   }
 
-  // 添加摘要
   if (summary) {
     contextMessages.push(
-      new SystemMessage({
-        content: `对话摘要：
-${summary}`,
-      }),
+      new SystemMessage({ content: buildExecutorSummaryContext(summary) }),
     );
   }
 
-  // 合并所有消息
-  // 🚨 修正：不再使用 slice(-20)，因为我们已经有自动摘要机制确保 messages 不会过长。
-  // 如果使用 slice(-20)，会导致第21-39条消息（尚未触发摘要时）对模型不可见，造成记忆缺失。
-  // 直接使用 full messages，依靠上方的自动摘要逻辑来控制长度。
   const fullMessages = [...contextMessages, ...messages];
-
   const response = await modelWithTools.invoke(fullMessages);
-
   const newIterationCount = iterationCount + 1;
 
-  // 决定路由
+  // 路由逻辑
 
   // 1. 如果有工具调用
   if (response.tool_calls?.length) {
-    // 检查敏感工具
     const hasSensitive = response.tool_calls.some((tool) =>
       SENSITIVE_TOOLS.includes(tool.name),
     );
-
     const demoMode = state.demoMode || false;
 
     if (hasSensitive && !demoMode) {
-      return new Command({
-        update: {
-          messages: [response],
-          pendingToolCalls: response.tool_calls,
-          iterationCount: newIterationCount,
-        },
-        goto: "review",
-      });
+      return routeToReview(response, newIterationCount, response.tool_calls);
     }
-
-    return new Command({
-      update: {
-        messages: [response],
-        pendingToolCalls: response.tool_calls,
-        iterationCount: newIterationCount,
-      },
-      goto: "tools",
-    });
+    return routeToTools(response, newIterationCount, response.tool_calls);
   }
 
   // 2. 没有工具调用 - 检查任务是否完成
-  const content = String(response.content || "").toLowerCase();
-
-  const hasCompletionKeyword =
-    content.includes("任务完成") ||
-    content.includes("已完成") ||
-    content.includes("完成了") ||
-    content.includes("task completed") ||
-    content.includes("completed") ||
-    /✅/.test(String(response.content || ""));
-
-  const isAskingForHelp =
-    content.includes("如果你需要") ||
-    content.includes("if you need") ||
-    content.includes("请告诉我") ||
-    content.includes("let me know") ||
-    content.includes("还有什么") ||
-    content.includes("需要帮助");
-
-  // 检测本次迭代中是否有工具执行(查看最近的消息)
-  const recentToolMessages = messages
-    .slice(-10)
-    .filter(
-      (m) =>
-        m &&
-        ((m as any)._getType?.() === "tool" ||
-          m.constructor.name === "ToolMessage"),
-    );
+  const content = safeToString(response.content).toLowerCase();
+  const hasCompletionKeyword = hasCompletionToken(content);
+  const askingForHelp = isAskingForHelp(content);
+  const recentToolMessages = getRecentToolMessages(messages);
   const hasRecentToolExecution = recentToolMessages.length > 0;
-
   const taskReallyCompleted = hasCompletionKeyword;
-  const stuckInLoop = newIterationCount >= 10 && !response.tool_calls?.length;
+  const stuckInLoop = newIterationCount >= CONSTANTS.STUCK_LOOP_ITERATIONS;
 
+  // 任务完成或卡在循环中
   if ((taskReallyCompleted || stuckInLoop) && todos.length > 0) {
     const nextIndex = currentTodoIndex + 1;
     const allDone = nextIndex >= todos.length;
-
-    if (allDone) {
-      return new Command({
-        update: {
-          messages: [response],
-          currentTodoIndex: nextIndex,
-          taskCompleted: true,
-          taskStatus: "completed" as const,
-          iterationCount: 0,
-        },
-        goto: END,
-      });
-    }
-
-    return new Command({
-      update: {
-        messages: [response],
-        currentTodoIndex: nextIndex,
-        taskCompleted: true,
-        iterationCount: 0,
-      },
-      goto: "executor",
-    });
+    return skipToNextTodoWithResponse(response, nextIndex, allDone);
   }
 
-  // 3. 如果是询问式回复,视为任务完成信号
-  if (isAskingForHelp && hasRecentToolExecution) {
+  // 询问式回复且最近有工具执行
+  if (askingForHelp && hasRecentToolExecution) {
     const nextIndex = currentTodoIndex + 1;
     const allDone = nextIndex >= todos.length;
-
-    if (allDone) {
-      return new Command({
-        update: {
-          messages: [response],
-          currentTodoIndex: nextIndex,
-          taskCompleted: true,
-          taskStatus: "completed" as const,
-          iterationCount: 0,
-        },
-        goto: END,
-      });
-    }
-
-    return new Command({
-      update: {
-        messages: [response],
-        currentTodoIndex: nextIndex,
-        taskCompleted: true,
-        iterationCount: 0,
-      },
-      goto: "executor",
-    });
+    return skipToNextTodoWithResponse(response, nextIndex, allDone);
   }
 
-  // 4. 兜底逻辑
+  // 兜底逻辑 - 达到一定迭代次数且没有进展
   if (
     !hasCompletionKeyword &&
     !hasRecentToolExecution &&
-    newIterationCount >= 5
+    newIterationCount >= CONSTANTS.SKIP_TO_NEXT_ITERATIONS
   ) {
     const nextIndex = currentTodoIndex + 1;
     const allDone = nextIndex >= todos.length;
-
-    if (allDone) {
-      return new Command({
-        update: {
-          messages: [response],
-          currentTodoIndex: nextIndex,
-          taskCompleted: true,
-          taskStatus: "completed" as const,
-          iterationCount: 0,
-        },
-        goto: END,
-      });
-    }
-
-    return new Command({
-      update: {
-        messages: [response],
-        currentTodoIndex: nextIndex,
-        taskCompleted: true,
-        iterationCount: 0,
-      },
-      goto: "executor",
-    });
+    return skipToNextTodoWithResponse(response, nextIndex, allDone);
   }
 
-  // 5. 继续当前任务
-  return new Command({
-    update: {
-      messages: [response],
-      iterationCount: newIterationCount,
-    },
-    goto: "executor",
-  });
+  // 继续当前任务
+  return continueExecution(response, newIterationCount);
 }
 
 /**
@@ -910,46 +542,18 @@ ${summary}`,
 const toolsNodeBase = new ToolNode(tools);
 
 export async function toolsNode(state: AgentState) {
-  // console.log("🛑 [tools] === 进入工具节点调试模式 ===");
-
   const lastMsg = state.messages[state.messages.length - 1];
 
-  // 1. 检查输入消息
-  if (lastMsg._getType() !== "ai" || !(lastMsg as any).tool_calls?.length) {
-    // console.error(
-    //   "[tools] ❌ 错误: 并没有检测到工具调用请求！最后一条消息是:",
-    //   lastMsg,
-    // );
+  if (!isAIMessage(lastMsg) || !hasToolCalls(lastMsg)) {
     return new Command({ goto: "executor" });
   }
 
   const toolCall = (lastMsg as any).tool_calls[0];
-  // console.log(`[tools] 🎯 Agent 想要执行: "${toolCall.name}"`);
-  // console.log(`[tools] 📦 参数:`, JSON.stringify(toolCall.args));
 
   try {
-    // 2. 检查工具是否存在 (这是最常见的问题!)
-    // 假设你的 toolsNodeBase 是通过 new ToolNode(tools) 创建的
-    // 我们这里没办法直接访问内部 tools 列表，所以我们要看 invoke 的结果
-
-    //console.log("[tools] 🚀 正在调用 toolsNodeBase.invoke...");
     const result = await toolsNodeBase.invoke(state);
 
-    // console.log(
-    //   "[tools] 📥 toolsNodeBase 返回原始数据:",
-    //   JSON.stringify(result, null, 2),
-    // );
-
-    // 3. 关键检查: 是否生成了 messages
     if (!result.messages || result.messages.length === 0) {
-      // console.error(
-      //   `[tools] 😱 严重错误: 工具 "${toolCall.name}" 似乎没有被执行！`,
-      // );
-      // console.error(
-      //   `[tools] 可能原因: 工具名称定义不匹配。Agent 叫它 "${toolCall.name}"，但你定义的工具可能有不同名字？`,
-      // );
-
-      // 强制返回一个错误消息，打破死循环
       return new Command({
         update: {
           messages: [
@@ -965,12 +569,6 @@ export async function toolsNode(state: AgentState) {
       });
     }
 
-    // 4. 成功情况
-    //const outputMsg = result.messages[0];
-    // console.log(
-    //   `[tools] ✅ 执行成功! 返回内容预览: ${(outputMsg.content as string).slice(0, 50)}...`,
-    // );
-
     return new Command({
       update: {
         messages: result.messages,
@@ -981,8 +579,6 @@ export async function toolsNode(state: AgentState) {
       goto: "executor",
     });
   } catch (error) {
-    // console.error("[tools] 💥 工具执行炸了:", error);
-
     return new Command({
       update: {
         messages: [
@@ -1003,35 +599,21 @@ export async function toolsNode(state: AgentState) {
  * 人工审批节点
  */
 export async function reviewNode(state: AgentState) {
-  //  console.log("👮 [review] === 进入审批节点调试模式 ===");
-
   const lastMsg = state.messages[state.messages.length - 1];
-  //console.log(`[review] 最后一条消息类型: ${lastMsg._getType()}`);
 
-  // 情况 1: 用户拒绝 (前端通常会插入一条 ToolMessage 说 "User rejected")
+  // 用户拒绝
   if (
-    lastMsg._getType() === "tool" ||
-    (lastMsg.content && (lastMsg.content as string).includes("rejected"))
+    isToolMessage(lastMsg) ||
+    (lastMsg.content && String(lastMsg.content).includes("rejected"))
   ) {
-    //console.log("[review] 🛑 检测到拒绝信号，跳过工具执行，回 executor");
     return new Command({ goto: "executor" });
   }
 
-  // 情况 2: 用户批准
-  // 此时最后一条消息应该是 AI 之前发出的请求 (AIMessage 且带 tool_calls)
-  if (lastMsg._getType() === "ai" && (lastMsg as any).tool_calls?.length > 0) {
-    // console.log("[review] ✅ 检测到待执行的工具，批准通过！");
-    // console.log("[review] 🚀 正在跳转到 -> tools 节点...");
-
-    // 🔥 核心修复：必须显式返回 goto: "tools"
-    return new Command({
-      goto: "tools",
-    });
+  // 用户批准
+  if (isAIMessage(lastMsg) && hasToolCalls(lastMsg)) {
+    return new Command({ goto: "tools" });
   }
 
-  // 情况 3: 异常状态
-  // console.warn(
-  //   "[review] ⚠️ 这里的状态有点奇怪，既不是拒绝也不是待执行的工具，默认回 executor",
-  // );
+  // 异常状态
   return new Command({ goto: "executor" });
 }
